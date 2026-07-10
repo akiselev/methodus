@@ -186,12 +186,36 @@ impl BfgsBSolver {
                 }
             }
 
-            // Line search along the projected direction.
-            let (alpha, f_new) = line_search::line_search(
-                objective, store, param_ids, &x, &direction, f, &grad, config,
-            );
+            // Bound-aware line search: cap the step at the first bound
+            // crossing so the objective is never evaluated outside the box.
+            let alpha_max = line_search::max_feasible_step(&x, &direction, &lower, &upper);
+            let step = match line_search::bounded_line_search(
+                objective, store, param_ids, &x, &direction, f, &grad, alpha_max, config,
+            ) {
+                Ok(step) => step,
+                Err(_) => {
+                    // Store was restored to x; report the best point found.
+                    write_x_to_store(store, param_ids, &x);
+                    return OptimizationResult {
+                        objective_value: f,
+                        status: OptimizationStatus::LineSearchFailed,
+                        outer_iterations: iter,
+                        inner_iterations: 0,
+                        kkt_residual: KktResidual {
+                            primal: 0.0,
+                            dual: pg_norm,
+                            complementarity: 0.0,
+                        },
+                        multipliers: MultiplierStore::new(),
+                        constraint_violations: Vec::new(),
+                        duration: start.elapsed(),
+                    };
+                }
+            };
+            let (alpha, f_new) = (step.alpha, step.f);
 
-            // Compute new iterate and project onto box.
+            // Compute new iterate. The step is feasible by construction;
+            // clamp only to absorb floating-point rounding at the boundary.
             let mut x_new: Vec<f64> = x
                 .iter()
                 .zip(&direction)
@@ -199,15 +223,26 @@ impl BfgsBSolver {
                 .collect();
             project(&mut x_new, &lower, &upper);
             debug_assert!(
-                x_new
-                    .iter()
-                    .zip(lower.iter())
-                    .zip(upper.iter())
-                    .all(|((xi, lo), hi)| *xi >= *lo && *xi <= *hi),
-                "BfgsB bounds invariant violated after projection"
+                {
+                    let unclamped: Vec<f64> = x
+                        .iter()
+                        .zip(&direction)
+                        .map(|(xi, di)| xi + alpha * di)
+                        .collect();
+                    unclamped
+                        .iter()
+                        .zip(&x_new)
+                        .all(|(u, c)| (u - c).abs() < 1e-9)
+                },
+                "BfgsB accepted a step materially outside the feasible box"
             );
 
             write_x_to_store(store, param_ids, &x_new);
+            debug_assert!(
+                (f_new - objective.value(store)).abs()
+                    <= 1e-9 * (1.0 + f_new.abs()),
+                "BfgsB reported objective does not match the accepted iterate"
+            );
             let grad_new = dense_gradient(objective, store, param_ids, n);
 
             // L-BFGS update: s = x_new - x (unprojected), y = P(g_new) - P(g_old).
@@ -496,4 +531,145 @@ fn subspace_minimization(
     }
 
     correction
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::id::{EntityId, ParamId};
+    use crate::optimization::{Objective, ObjectiveId, OptimizationStatus};
+
+    /// f(x) = -ln(x0) + x0; undefined (NaN) for x0 <= 0, minimum at x0 = 1.
+    struct LogBarrier {
+        params: Vec<ParamId>,
+    }
+
+    impl Objective for LogBarrier {
+        fn id(&self) -> ObjectiveId {
+            ObjectiveId::new(0, 0)
+        }
+        fn name(&self) -> &str {
+            "log_barrier"
+        }
+        fn param_ids(&self) -> &[ParamId] {
+            &self.params
+        }
+        fn value(&self, store: &ParamStore) -> f64 {
+            let x = store.get(self.params[0]);
+            if x <= 0.0 {
+                f64::NAN
+            } else {
+                -x.ln() + x
+            }
+        }
+        fn gradient(&self, store: &ParamStore) -> Vec<(ParamId, f64)> {
+            let x = store.get(self.params[0]);
+            vec![(self.params[0], -1.0 / x + 1.0)]
+        }
+    }
+
+    /// f(x, y) = (x + 2)^2 + (y + 2)^2; unconstrained minimum at (-2, -2).
+    struct ShiftedBowl {
+        params: Vec<ParamId>,
+    }
+
+    impl Objective for ShiftedBowl {
+        fn id(&self) -> ObjectiveId {
+            ObjectiveId::new(1, 0)
+        }
+        fn name(&self) -> &str {
+            "shifted_bowl"
+        }
+        fn param_ids(&self) -> &[ParamId] {
+            &self.params
+        }
+        fn value(&self, store: &ParamStore) -> f64 {
+            self.params
+                .iter()
+                .map(|&p| (store.get(p) + 2.0).powi(2))
+                .sum()
+        }
+        fn gradient(&self, store: &ParamStore) -> Vec<(ParamId, f64)> {
+            self.params
+                .iter()
+                .map(|&p| (p, 2.0 * (store.get(p) + 2.0)))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn objective_undefined_outside_bounds_never_evaluated_there() {
+        // min -ln(x) + x for x in [0.05, 10]; solution x = 1. Any trial
+        // point at x <= 0 would return NaN and fail the solve.
+        let mut store = ParamStore::new();
+        let owner = EntityId::new(0, 0);
+        let p = store.alloc(0.1, owner);
+        store.set_bounds(p, 0.05, 10.0);
+
+        let obj = LogBarrier { params: vec![p] };
+        let config = OptimizationConfig::default();
+        let result = BfgsBSolver::solve(&obj, &mut store, &config);
+
+        assert_eq!(result.status, OptimizationStatus::Converged);
+        assert!(
+            (store.get(p) - 1.0).abs() < 1e-4,
+            "expected x = 1, got {}",
+            store.get(p)
+        );
+        assert!(result.objective_value.is_finite());
+    }
+
+    #[test]
+    fn corner_solution_with_multiple_active_bounds() {
+        // Bowl centered at (-2, -2), box [0, 5] x [0, 5]: solution is the
+        // corner (0, 0) with both bounds simultaneously active.
+        let mut store = ParamStore::new();
+        let owner = EntityId::new(0, 0);
+        let px = store.alloc(3.0, owner);
+        let py = store.alloc(4.0, owner);
+        store.set_bounds(px, 0.0, 5.0);
+        store.set_bounds(py, 0.0, 5.0);
+
+        let obj = ShiftedBowl {
+            params: vec![px, py],
+        };
+        let config = OptimizationConfig::default();
+        let result = BfgsBSolver::solve(&obj, &mut store, &config);
+
+        assert_eq!(result.status, OptimizationStatus::Converged);
+        assert!(store.get(px).abs() < 1e-6, "px = {}", store.get(px));
+        assert!(store.get(py).abs() < 1e-6, "py = {}", store.get(py));
+        // Reported objective must match the returned iterate.
+        assert!((result.objective_value - obj.value(&store)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn boundary_solution_single_active_bound() {
+        // Bowl centered at (-2, -2), box [0, 5] x [-5, 5]: solution (0, -2)
+        // with only the x lower bound active.
+        let mut store = ParamStore::new();
+        let owner = EntityId::new(0, 0);
+        let px = store.alloc(3.0, owner);
+        let py = store.alloc(4.0, owner);
+        store.set_bounds(px, 0.0, 5.0);
+        store.set_bounds(py, -5.0, 5.0);
+
+        let obj = ShiftedBowl {
+            params: vec![px, py],
+        };
+        let config = OptimizationConfig::default();
+        let result = BfgsBSolver::solve(&obj, &mut store, &config);
+
+        assert_eq!(result.status, OptimizationStatus::Converged);
+        assert!(store.get(px).abs() < 1e-6, "px = {}", store.get(px));
+        assert!(
+            (store.get(py) + 2.0).abs() < 1e-4,
+            "py = {}",
+            store.get(py)
+        );
+    }
 }

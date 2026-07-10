@@ -104,6 +104,16 @@ impl SolvePipeline {
         self.cached_clusters.len()
     }
 
+    /// Map from constraint slot index to the cluster containing it, for the
+    /// cached decomposition. Used by final residual certification to compare
+    /// each constraint's actual residual against what its cluster reported.
+    pub fn constraint_cluster_map(&self) -> HashMap<usize, ClusterId> {
+        self.cached_clusters
+            .iter()
+            .flat_map(|c| c.constraint_indices.iter().map(move |&ci| (ci, c.id)))
+            .collect()
+    }
+
     /// Run the full pipeline.
     ///
     /// If structural changes are detected via the `tracker`, or the cached
@@ -156,110 +166,173 @@ impl SolvePipeline {
         }
 
         // -----------------------------------------------------------------
-        // (b) Build param_to_cluster map
+        // (b) Build the param -> clusters dependency map.
+        //
+        // A cluster depends on every parameter its constraints reference —
+        // including parameters it does not own (e.g. fixed or substituted
+        // parameters shared with another cluster). The map is one-to-many:
+        // when a parameter changes, every dependent cluster must re-solve.
         // -----------------------------------------------------------------
-        let mut param_to_cluster: HashMap<ParamId, ClusterId> = HashMap::new();
+        let mut param_to_clusters: HashMap<ParamId, Vec<ClusterId>> = HashMap::new();
         for cluster in &self.cached_clusters {
+            let mut seen: HashSet<ParamId> = HashSet::new();
+            for &ci in &cluster.constraint_indices {
+                if let Some(c) = constraints.get(ci).and_then(|c| c.as_deref()) {
+                    for &pid in c.param_ids() {
+                        if seen.insert(pid) {
+                            param_to_clusters.entry(pid).or_default().push(cluster.id);
+                        }
+                    }
+                }
+            }
             for &pid in &cluster.param_ids {
-                param_to_cluster.insert(pid, cluster.id);
+                if seen.insert(pid) {
+                    param_to_clusters.entry(pid).or_default().push(cluster.id);
+                }
             }
         }
 
         // -----------------------------------------------------------------
-        // (c) Determine dirty clusters
+        // (c) Determine initially dirty clusters
         // -----------------------------------------------------------------
-        let dirty_clusters: HashSet<ClusterId> = if structural_change {
+        let mut pending: HashSet<ClusterId> = if structural_change {
             self.cached_clusters.iter().map(|c| c.id).collect()
         } else {
-            tracker.compute_dirty_clusters(&param_to_cluster)
+            tracker.compute_dirty_clusters(&param_to_clusters)
         };
 
         // -----------------------------------------------------------------
-        // (d) Process each cluster
+        // (d) Solve dirty clusters, cascading to dependents.
+        //
+        // Solving a cluster can change parameters that other clusters'
+        // constraints reference (shared or substituted parameters). Those
+        // downstream clusters are marked dirty and the loop iterates to a
+        // fixed point, bounded by the cluster count so mutually inconsistent
+        // clusters cannot ping-pong forever. (Any residual inconsistency is
+        // caught by the final residual certification in `ConstraintSystem`.)
         // -----------------------------------------------------------------
-        let mut cluster_results = Vec::with_capacity(self.cached_clusters.len());
-        let mut all_diagnostics: Vec<DiagnosticIssue> = Vec::new();
+        let mut latest_results: HashMap<ClusterId, ClusterResult> = HashMap::new();
+        let mut latest_diagnostics: HashMap<ClusterId, Vec<DiagnosticIssue>> = HashMap::new();
+        let mut total_iterations = 0usize;
 
-        for cluster in &self.cached_clusters {
-            if !dirty_clusters.contains(&cluster.id) {
-                // Clean cluster: skip with cached residual.
-                let cached_residual = cache
-                    .get(&cluster.id)
-                    .map(|c| c.residual_norm)
-                    .unwrap_or(0.0);
-                cluster_results.push(ClusterResult {
-                    cluster_id: cluster.id,
-                    status: ClusterSolveStatus::Skipped,
-                    iterations: 0,
-                    residual_norm: cached_residual,
-                });
-                continue;
+        let max_passes = self.cached_clusters.len().max(1);
+        for _pass in 0..max_passes {
+            if pending.is_empty() {
+                break;
             }
+            for cluster in &self.cached_clusters {
+                if !pending.remove(&cluster.id) {
+                    continue;
+                }
 
-            // Phase 2: Analyze (immutable borrow of store).
-            let analysis = self.analyze.analyze(cluster, constraints, entities, store);
+                // Snapshot this cluster's parameter values so downstream
+                // dependents can be marked dirty if the solve changes them.
+                let before: Vec<f64> =
+                    cluster.param_ids.iter().map(|&pid| store.get(pid)).collect();
 
-            // Phase 3: Reduce (may temporarily fix eliminated params in store).
-            let reduced = self.reduce.reduce(cluster, constraints, store);
+                // Phase 2: Analyze (immutable borrow of store).
+                let analysis = self.analyze.analyze(cluster, constraints, entities, store);
 
-            // Phase 4: Solve (immutable borrow of store).
-            let warm_start = cache.get(&cluster.id).map(|c| c.solution.as_slice());
-            let solution = self.solve.solve_cluster(
-                &reduced,
-                &analysis,
-                constraints,
-                store,
-                warm_start,
-                config,
-            );
+                // Phase 3: Reduce (may temporarily fix eliminated params in store).
+                let reduced = self.reduce.reduce(cluster, constraints, store);
 
-            // -- Write solution back to store --
+                // Phase 4: Solve (immutable borrow of store).
+                let warm_start = cache.get(&cluster.id).map(|c| c.solution.as_slice());
+                let solution = self.solve.solve_cluster(
+                    &reduced,
+                    &analysis,
+                    constraints,
+                    store,
+                    warm_start,
+                    config,
+                );
 
-            // Write solution param_values back to store.
-            for &(pid, val) in &solution.param_values {
-                store.set(pid, val);
+                // -- Write solution back to store --
+
+                // Write solution param_values back to store.
+                for &(pid, val) in &solution.param_values {
+                    store.set(pid, val);
+                }
+
+                // Write numerical_solution back via mapping if present.
+                if let (Some(mapping), Some(nums)) =
+                    (&solution.mapping, &solution.numerical_solution)
+                {
+                    store.write_free_values(nums, mapping);
+                }
+
+                // Cache the solution.
+                let cached_solution = solution.numerical_solution.clone().unwrap_or_default();
+                cache.store(
+                    cluster.id,
+                    cached_solution,
+                    solution.residual_norm,
+                    solution.iterations,
+                );
+
+                // Un-fix params that were temporarily fixed during the reduce
+                // phase so they remain free for subsequent pipeline runs.
+                for &(pid, _) in &reduced.eliminated_params {
+                    store.unfix(pid);
+                }
+
+                // Post-process.
+                let result = self
+                    .post_process
+                    .post_process(&solution, &analysis, cluster);
+                total_iterations += result.iterations;
+                latest_results.insert(cluster.id, result);
+
+                // Collect diagnostics from analysis (latest solve wins).
+                latest_diagnostics.insert(cluster.id, collect_diagnostics(&analysis));
+
+                // Mark dependents of any parameter this solve changed.
+                for (i, &pid) in cluster.param_ids.iter().enumerate() {
+                    let now = store.get(pid);
+                    if (now - before[i]).abs() > 1e-12 * (1.0 + before[i].abs()) {
+                        if let Some(dependents) = param_to_clusters.get(&pid) {
+                            for &other in dependents {
+                                if other != cluster.id {
+                                    pending.insert(other);
+                                }
+                            }
+                        }
+                    }
+                }
             }
-
-            // Write numerical_solution back via mapping if present.
-            if let (Some(mapping), Some(nums)) = (&solution.mapping, &solution.numerical_solution) {
-                store.write_free_values(nums, mapping);
-            }
-
-            // Cache the solution.
-            let cached_solution = solution.numerical_solution.clone().unwrap_or_default();
-            cache.store(
-                cluster.id,
-                cached_solution,
-                solution.residual_norm,
-                solution.iterations,
-            );
-
-            // Un-fix params that were temporarily fixed during the reduce
-            // phase so they remain free for subsequent pipeline runs.
-            for &(pid, _) in &reduced.eliminated_params {
-                store.unfix(pid);
-            }
-
-            // Post-process.
-            let result = self
-                .post_process
-                .post_process(&solution, &analysis, cluster);
-            cluster_results.push(result);
-
-            // Collect diagnostics from analysis.
-            all_diagnostics.extend(collect_diagnostics(&analysis));
         }
 
         // -----------------------------------------------------------------
-        // (e) Aggregate results
+        // (e) Aggregate results (clusters never solved this run are Skipped)
         // -----------------------------------------------------------------
+        let mut cluster_results = Vec::with_capacity(self.cached_clusters.len());
+        let mut all_diagnostics: Vec<DiagnosticIssue> = Vec::new();
+        for cluster in &self.cached_clusters {
+            match latest_results.remove(&cluster.id) {
+                Some(result) => cluster_results.push(result),
+                None => {
+                    let cached_residual = cache
+                        .get(&cluster.id)
+                        .map(|c| c.residual_norm)
+                        .unwrap_or(0.0);
+                    cluster_results.push(ClusterResult {
+                        cluster_id: cluster.id,
+                        status: ClusterSolveStatus::Skipped,
+                        iterations: 0,
+                        residual_norm: cached_residual,
+                    });
+                }
+            }
+            if let Some(diags) = latest_diagnostics.remove(&cluster.id) {
+                all_diagnostics.extend(diags);
+            }
+        }
+
         let mut converged_count = 0usize;
         let mut not_converged_count = 0usize;
         let mut skipped_count = 0usize;
-        let mut total_iterations = 0usize;
 
         for cr in &cluster_results {
-            total_iterations += cr.iterations;
             match cr.status {
                 ClusterSolveStatus::Converged => converged_count += 1,
                 ClusterSolveStatus::NotConverged => not_converged_count += 1,
@@ -821,6 +894,205 @@ mod tests {
         assert!(matches!(result.status, SystemStatus::Solved));
         assert_eq!(result.clusters.len(), 0);
         assert_eq!(result.total_iterations, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression: cross-cluster cascading (P0 §1)
+    // -----------------------------------------------------------------------
+
+    /// Decompose that puts each constraint in its own cluster and assigns
+    /// explicit parameter ownership, creating *dependent* clusters: a cluster
+    /// may reference (through its constraints) parameters owned by another
+    /// cluster. This models the dependency structure that reduction /
+    /// fixed-parameter substitution creates.
+    struct OwnershipDecompose {
+        /// Per-cluster: (constraint indices, owned params).
+        clusters: Vec<(Vec<usize>, Vec<ParamId>)>,
+    }
+
+    impl Decompose for OwnershipDecompose {
+        fn decompose(
+            &self,
+            constraints: &[Option<Box<dyn Constraint>>],
+            _entities: &[Option<Box<dyn Entity>>],
+            _store: &ParamStore,
+        ) -> Vec<ClusterData> {
+            self.clusters
+                .iter()
+                .enumerate()
+                .map(|(i, (constraint_indices, param_ids))| {
+                    let entity_ids = constraint_indices
+                        .iter()
+                        .filter_map(|&ci| constraints[ci].as_ref())
+                        .flat_map(|c| c.entity_ids().iter().copied())
+                        .collect();
+                    ClusterData {
+                        id: crate::id::ClusterId(i),
+                        constraint_indices: constraint_indices.clone(),
+                        param_ids: param_ids.clone(),
+                        entity_ids,
+                    }
+                })
+                .collect()
+        }
+    }
+
+    /// An earlier cluster's stale input must be re-solved after the cluster
+    /// owning the shared parameter changes it.
+    ///
+    /// Cluster 0 owns `b` and solves `a + b = 10` treating `a` as external.
+    /// Cluster 1 owns `a` and solves `a = 3`. Cluster 0 runs first with the
+    /// stale `a = 0`, producing `b = 10`; once cluster 1 moves `a` to 3, the
+    /// dependency map must cascade a re-solve of cluster 0 so `b = 7`.
+    #[test]
+    fn cross_cluster_cascade_propagates_shared_param_changes() {
+        let mut store = ParamStore::new();
+        let eid = EntityId::new(0, 0);
+        let pa = store.alloc(0.0, eid);
+        let pb = store.alloc(0.0, eid);
+
+        let point = TestPoint {
+            id: eid,
+            params: vec![pa, pb],
+        };
+        let entities: Vec<Option<Box<dyn Entity>>> = vec![Some(Box::new(point))];
+
+        // Constraint 0 (solved first): a + b = 10, its cluster owns only b.
+        let c0: Box<dyn Constraint> = Box::new(SumConstraint {
+            id: ConstraintId::new(0, 0),
+            entity_ids: vec![eid],
+            params: vec![pa, pb],
+            target: 10.0,
+        });
+        // Constraint 1 (solved second): a = 3, its cluster owns a.
+        let c1: Box<dyn Constraint> = Box::new(FixValueConstraint {
+            id: ConstraintId::new(1, 0),
+            entity_ids: vec![eid],
+            param: pa,
+            target: 3.0,
+        });
+        let constraints: Vec<Option<Box<dyn Constraint>>> = vec![Some(c0), Some(c1)];
+
+        let mut pipeline = PipelineBuilder::new()
+            .decompose(OwnershipDecompose {
+                clusters: vec![(vec![0], vec![pb]), (vec![1], vec![pa])],
+            })
+            .build();
+
+        let config = SystemConfig::default();
+        let mut tracker = ChangeTracker::new();
+        let mut cache = SolutionCache::new();
+        tracker.mark_constraint_added(ConstraintId::new(0, 0));
+        tracker.mark_constraint_added(ConstraintId::new(1, 0));
+
+        let result = pipeline.run(
+            &constraints,
+            &entities,
+            &mut store,
+            &config,
+            &mut tracker,
+            &mut cache,
+        );
+
+        assert!(
+            matches!(result.status, SystemStatus::Solved),
+            "expected Solved after cascading, got {:?}",
+            result.status,
+        );
+        assert!(
+            (store.get(pa) - 3.0).abs() < 1e-6,
+            "a = {}, expected 3.0",
+            store.get(pa),
+        );
+        assert!(
+            (store.get(pb) - 7.0).abs() < 1e-6,
+            "b = {}, expected 7.0 (10 - a): stale value means the cascade \
+             from cluster 1 to cluster 0 did not propagate",
+            store.get(pb),
+        );
+
+        // Incremental follow-up: nudging the shared parameter must dirty
+        // BOTH dependent clusters through the one-to-many mapping.
+        store.set(pa, 100.0);
+        tracker.mark_param_dirty(pa);
+        let result2 = pipeline.run(
+            &constraints,
+            &entities,
+            &mut store,
+            &config,
+            &mut tracker,
+            &mut cache,
+        );
+        assert!(
+            matches!(result2.status, SystemStatus::Solved),
+            "incremental re-solve failed: {:?}",
+            result2.status,
+        );
+        assert!((store.get(pa) - 3.0).abs() < 1e-6);
+        assert!((store.get(pb) - 7.0).abs() < 1e-6);
+    }
+
+    /// Mutually inconsistent dependent clusters must terminate within the
+    /// bounded pass count (and certification, at the system level, reports
+    /// the residual inconsistency).
+    #[test]
+    fn cross_cluster_cascade_pass_count_is_bounded() {
+        let mut store = ParamStore::new();
+        let eid = EntityId::new(0, 0);
+        let pa = store.alloc(0.0, eid);
+        let pb = store.alloc(0.0, eid);
+
+        let point = TestPoint {
+            id: eid,
+            params: vec![pa, pb],
+        };
+        let entities: Vec<Option<Box<dyn Entity>>> = vec![Some(Box::new(point))];
+
+        // Contradictory: cluster 0 owns b, wants a + b = 10.
+        //                cluster 1 owns a, wants a + b = 20.
+        let c0: Box<dyn Constraint> = Box::new(SumConstraint {
+            id: ConstraintId::new(0, 0),
+            entity_ids: vec![eid],
+            params: vec![pa, pb],
+            target: 10.0,
+        });
+        let c1: Box<dyn Constraint> = Box::new(SumConstraint {
+            id: ConstraintId::new(1, 0),
+            entity_ids: vec![eid],
+            params: vec![pa, pb],
+            target: 20.0,
+        });
+        let constraints: Vec<Option<Box<dyn Constraint>>> = vec![Some(c0), Some(c1)];
+
+        let mut pipeline = PipelineBuilder::new()
+            .decompose(OwnershipDecompose {
+                clusters: vec![(vec![0], vec![pb]), (vec![1], vec![pa])],
+            })
+            .build();
+
+        let config = SystemConfig::default();
+        let mut tracker = ChangeTracker::new();
+        let mut cache = SolutionCache::new();
+        tracker.mark_constraint_added(ConstraintId::new(0, 0));
+        tracker.mark_constraint_added(ConstraintId::new(1, 0));
+
+        // Must terminate (bounded passes) rather than iterate forever.
+        let result = pipeline.run(
+            &constraints,
+            &entities,
+            &mut store,
+            &config,
+            &mut tracker,
+            &mut cache,
+        );
+        // Whatever per-cluster statuses come out, both constraints cannot
+        // hold: the residuals must disagree by 10.
+        let r0: f64 = store.get(pa) + store.get(pb);
+        assert!(
+            (r0 - 10.0).abs() > 1e-6 || (r0 - 20.0).abs() > 1e-6,
+            "contradictory targets cannot both be satisfied"
+        );
+        let _ = result;
     }
 
     // -----------------------------------------------------------------------

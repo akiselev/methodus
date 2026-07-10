@@ -90,6 +90,9 @@ pub use bfgs::BfgsSolver;
 pub use bfgs_b::BfgsBSolver;
 pub use trust_region::TrustRegionSolver;
 
+// Line search types
+pub use line_search::{LineSearchError, LineSearchFailure, LineSearchStep, StepCondition};
+
 // Result types
 pub use result::{SolveError, SolveResult};
 

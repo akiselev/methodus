@@ -93,41 +93,55 @@ impl BfgsSolver {
                 };
             }
 
-            // Compute search direction via L-BFGS two-loop recursion
-            let direction = lbfgs_direction(&grad, &s_history, &y_history);
-
-            // Check descent direction; reset memory and fall back to steepest descent if not.
-            let dg = dot(&grad, &direction);
-            if dg >= 0.0 {
+            // Compute search direction via L-BFGS two-loop recursion.
+            // Reset memory and fall back to steepest descent if not a
+            // descent direction.
+            let mut direction = lbfgs_direction(&grad, &s_history, &y_history);
+            if dot(&grad, &direction) >= 0.0 {
                 s_history.clear();
                 y_history.clear();
-                let direction: Vec<f64> = grad.iter().map(|g| -g).collect();
-                let (alpha, f_new) = line_search::line_search(
-                    objective, store, &param_ids, &x, &direction, f, &grad, config,
-                );
-                let x_new: Vec<f64> = x
-                    .iter()
-                    .zip(&direction)
-                    .map(|(xi, di)| xi + alpha * di)
-                    .collect();
-                write_x_to_store(store, &param_ids, &x_new);
-                let grad_new = dense_gradient(objective, store, &param_ids, n);
-
-                let s: Vec<f64> = x_new.iter().zip(&x).map(|(a, b)| a - b).collect();
-                let y: Vec<f64> = grad_new.iter().zip(&grad).map(|(a, b)| a - b).collect();
-
-                update_lbfgs_history(&mut s_history, &mut y_history, s, y, m);
-
-                x = x_new;
-                f = f_new;
-                grad = grad_new;
-                grad_norm = vec_norm(&grad);
-                continue;
+                direction = grad.iter().map(|g| -g).collect();
             }
 
-            let (alpha, f_new) = line_search::line_search(
+            let mut attempt = line_search::line_search(
                 objective, store, &param_ids, &x, &direction, f, &grad, config,
             );
+
+            // A failed search along a quasi-Newton direction may just mean
+            // the L-BFGS model went bad: reset the memory and retry once
+            // along steepest descent before giving up.
+            if attempt.is_err() && !s_history.is_empty() {
+                s_history.clear();
+                y_history.clear();
+                direction = grad.iter().map(|g| -g).collect();
+                attempt = line_search::line_search(
+                    objective, store, &param_ids, &x, &direction, f, &grad, config,
+                );
+            }
+
+            let step = match attempt {
+                Ok(step) => step,
+                Err(_) => {
+                    // The store was restored to x by the line search; report
+                    // the best point found so far.
+                    write_x_to_store(store, &param_ids, &x);
+                    return OptimizationResult {
+                        objective_value: f,
+                        status: OptimizationStatus::LineSearchFailed,
+                        outer_iterations: iter,
+                        inner_iterations: 0,
+                        kkt_residual: KktResidual {
+                            primal: 0.0,
+                            dual: grad_norm,
+                            complementarity: 0.0,
+                        },
+                        multipliers: MultiplierStore::new(),
+                        constraint_violations: Vec::new(),
+                        duration: start.elapsed(),
+                    };
+                }
+            };
+            let (alpha, f_new) = (step.alpha, step.f);
 
             // Update x
             let x_new: Vec<f64> = x
@@ -136,8 +150,8 @@ impl BfgsSolver {
                 .map(|(xi, di)| xi + alpha * di)
                 .collect();
 
-            // Compute new gradient
-            write_x_to_store(store, &param_ids, &x_new);
+            // Compute new gradient (store already holds x_new after the
+            // accepted line-search step).
             let grad_new = dense_gradient(objective, store, &param_ids, n);
 
             // L-BFGS update: s = x_new - x, y = grad_new - grad

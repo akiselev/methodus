@@ -22,71 +22,80 @@ Suggested PR sequence:
 
 ## P0: Correctness (release blockers for 0.1)
 
-### 1. Decomposition cascading + global solve validation
+**All P0 sections completed 2026-07-10** (uncommitted at time of writing). Full workspace
+test suite passes with `--all-features` (1205 tests). Details below retained with notes.
 
-Highest-priority defect: an earlier cluster's solution may not propagate to dependent
-clusters. **Partially addressed** (uncommitted): final residual certification now prevents
-`SystemStatus::Solved` when post-solve residuals exceed tolerance
-(`DiagnosticIssue::UnsatisfiedConstraints`), with regression tests. Remaining:
+### 1. Decomposition cascading + global solve validation — DONE
 
-- [ ] Model dependencies between clusters created by reduction/fixed-parameter substitution.
-- [ ] Propagate dirty state downstream after a cluster changes shared or substituted parameters.
-- [ ] Iterate dependent clusters to a fixed point, with a bounded pass count.
-- [ ] Change `param_to_cluster` from single-cluster mapping to one-to-many dependency mapping where necessary.
-- [ ] Add regression tests reproducing the documented cascading failure (not just the certification backstop).
+- [x] Model dependencies between clusters created by reduction/fixed-parameter substitution
+      (`param_to_clusters` map built from each cluster's *constraint* param_ids, not just owned params).
+- [x] Propagate dirty state downstream after a cluster changes shared or substituted parameters
+      (per-solve parameter snapshot + dependent-cluster marking in `SolvePipeline::run_with_clock`).
+- [x] Iterate dependent clusters to a fixed point, bounded by the cluster count.
+- [x] `param_to_cluster` changed to one-to-many (`HashMap<ParamId, Vec<ClusterId>>`);
+      `ChangeTracker::compute_dirty_clusters` updated accordingly.
+- [x] Regression tests: `cross_cluster_cascade_propagates_shared_param_changes`,
+      `cross_cluster_cascade_pass_count_is_bounded` (pipeline tests with an overlapping custom decompose).
+- [x] Final residual certification refined: a constraint fails certification when its residual
+      exceeds tolerance *and* what its (Converged/Skipped) cluster reported — this keeps
+      legitimate least-squares minima (Bard, FreudensteinRoth) while still catching stale
+      cached/skipped/cascade-masked solutions. Requires `SolvePipeline::constraint_cluster_map()`.
 
-### 2. Repair the objective/Hessian API
+### 2. Repair the objective/Hessian API — DONE
 
-`set_objective_with_hessian()` sets only the Hessian field while `optimize()` requires the
-regular objective field; a stale Hessian can survive objective replacement.
+- [x] `ObjectiveModel` enum (FirstOrder/SecondOrder) stores one coherent objective;
+      `set_objective_with_hessian()` installs it for both first- and second-order evaluation.
+- [x] `set_objective()` replaces the whole model — no stale Hessian can survive.
+- [x] `has_objective()` recognizes second-order objectives.
+- [x] Tests for replacing objectives in both orders (`set_objective_replaces_hessian_objective`, etc.).
+- [x] Structural problem fingerprint (`problem_fingerprint()`): warm-start multipliers are cleared
+      when the objective or constraint set changes.
 
-- [ ] Make `set_objective_with_hessian()` install one coherent objective for both first- and second-order evaluation.
-- [ ] Clear any stale Hessian when `set_objective()` replaces the objective.
-- [ ] Make `has_objective()` recognize a second-order objective.
-- [ ] Prefer one stored abstraction (e.g. `ObjectiveModel` enum or object exposing optional Hessian-vector products).
-- [ ] Add tests for replacing objectives in every possible order.
-- [ ] Add a structural generation/fingerprint so warm-start multipliers can't be reused with a different objective.
+Algorithm-selection validation:
 
-Algorithm-selection validation (explicitly selecting BFGS/BFGS-B/trust region currently
-bypasses registered constraints instead of rejecting the configuration):
+- [x] Compatibility validated in `optimize()` before any solver touches parameters.
+- [x] `OptimizationStatus::UnsupportedProblemStructure { reason }` returned for incompatible configs.
+- [x] Explicit BFGS/trust region with finite bounds or eq/ineq constraints rejected; explicit
+      BFGS-B with eq/ineq constraints rejected (BFGS-B without bounds is allowed — it degenerates
+      correctly to BFGS).
+- [x] Decision recorded: constrained trust region is **unsupported** (rejected with
+      `UnsupportedProblemStructure`); a genuine constrained method is future work.
 
-- [ ] Validate algorithm/problem compatibility before changing parameters.
-- [ ] Return a structured `UnsupportedProblemStructure` error instead of silently solving a different problem.
-- [ ] Validate that BFGS-B is selected only where bounds are meaningful.
-- [ ] Decide whether constrained trust region is unsupported or implement a genuine constrained method later.
+### 3. Fix the L-BFGS-B line search — DONE
 
-### 3. Fix the L-BFGS-B line search
+- [x] `bounded_line_search()` + `max_feasible_step()` compute `alpha_max` from the first bound crossing.
+- [x] The objective is never evaluated outside the feasible box (test with NaN outside bounds).
+- [x] Reported `f` always matches the accepted iterate (debug assertions in `BfgsBSolver`).
+- [x] Line-search failure propagates as `OptimizationStatus::LineSearchFailed` instead of a fake step.
+- [x] Tests: `-ln(x)+x` (NaN outside box), boundary solutions, multi-active-bound corner solutions.
 
-The bounded solver calls the unconstrained line search, which may evaluate outside the box
-(`α > 1`), then projects the point but keeps the unprojected objective value.
+### 4. Finish the ALM implementation mathematically — DONE
 
-- [ ] Implement a bound-aware projected line search; compute `alpha_max` from the first bound along the direction.
-- [ ] Never evaluate the objective outside the feasible box.
-- [ ] Recompute the objective after any projection; assert reported `f == objective.value(store)` at every accepted iterate.
-- [ ] Return a line-search failure rather than treating the minimum step as success.
-- [ ] Test objectives undefined outside bounds (e.g. `ln(x)`, `x > 0`); test boundary/corner solutions and multiple simultaneously active bounds.
+- [x] Zero-free-variable path evaluates feasibility; violated constraints → `Infeasible`.
+- [x] ρ updates use combined `sqrt(‖g‖² + ‖max(0,h)‖²)` — inequality-only problems grow ρ.
+- [x] Convergence requires primal + stationarity + complementarity (dual feasibility μ ≥ 0 by construction).
+- [x] Stationarity computed for the original Lagrangian `∇f + Jgᵀλ + Jhᵀμ` with the updated multipliers.
+- [x] Warm-started μ clamped to `[0, max_multiplier]`; λ clamped symmetrically.
+- [x] Inner-solver divergence/non-finite values propagate as `Diverged`; inner line-search failure
+      feeds the stall counter instead of being ignored.
+- [x] Saturated-ρ stagnation → `Infeasible` (materially violated) or `Stalled`; contradictory-constraint
+      test asserts this.
+- [x] `constraint_violations` includes inequality values (equalities first, then inequalities).
+- [x] Mixed bounds + equality + inequality test (`alm_mixed_bounds_equalities_inequalities`).
+- [x] Module docs rewritten for the BFGS/BFGS-B inner loop with inequalities.
 
-### 4. Finish the ALM implementation mathematically
+### 5. Make line-search failure explicit — DONE
 
-- [ ] Evaluate feasibility before returning from the zero-free-variable path (currently reports converged without checking constraints on fixed params).
-- [ ] Base penalty (ρ) updates on combined equality + positive inequality violation (inequality-only problems currently never grow ρ).
-- [ ] Check all KKT components: primal feasibility, stationarity, dual feasibility, and complementarity.
-- [ ] Compute stationarity for the original Lagrangian `∇f + Jgᵀλ + Jhᵀμ`, not the gradient of the penalized subproblem.
-- [ ] Require `μ ≥ 0` with explicit dual-feasibility diagnostics; clamp/validate warm-started inequality multipliers.
-- [ ] Propagate inner BFGS/BFGS-B failures instead of continuing multiplier updates blindly.
-- [ ] Detect infeasibility or stalled penalty progression; contradictory-constraint tests must yield `Infeasible`/`Stalled`, not generic max-iterations.
-- [ ] Include inequality values in `constraint_violations`.
-- [ ] Add mixed bounds + equalities + inequalities tests.
-- [ ] Update ALM module docs (still describe an equality-only LM-based implementation; code now uses BFGS/BFGS-B with inequalities).
-
-### 5. Make line-search failure explicit
-
-- [ ] Return `Result<LineSearchStep, LineSearchFailure>`; record whether the step satisfied Wolfe, Armijo only, or neither.
-- [ ] Only retain zoom-fallback candidates that satisfy Armijo (currently tracks lowest f regardless).
-- [ ] Restore `ParamStore` to the returned candidate before exiting.
-- [ ] Add function/gradient evaluation counts and a configurable evaluation budget.
-- [ ] Detect non-finite objective and gradient values.
-- [ ] Add interpolation to zoom after correctness is established (bisection stays as fallback).
+- [x] `Result<LineSearchStep, LineSearchFailure>`; `StepCondition::{StrongWolfe, ArmijoOnly}` recorded.
+- [x] Zoom fallback retains only Armijo-satisfying candidates.
+- [x] `ParamStore` left at the accepted candidate on success, restored to the start point on failure.
+- [x] Function/gradient evaluation counts on both success and failure; `line_search_max_evals`
+      budget in `OptimizationConfig` (default 100).
+- [x] Non-finite objective/gradient detection; Armijo fallback backtracks through non-finite
+      regions toward the (finite) start point (required by Osborne 1).
+- [x] Safeguarded quadratic interpolation in zoom with bisection fallback.
+- [x] BFGS retries once along steepest descent (with L-BFGS memory reset) before reporting
+      `LineSearchFailed`.
 
 ---
 

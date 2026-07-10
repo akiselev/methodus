@@ -141,6 +141,37 @@ pub enum DiagnosticIssue {
 }
 
 // ---------------------------------------------------------------------------
+// Objective model
+// ---------------------------------------------------------------------------
+
+/// One coherent objective installed on the system.
+///
+/// Either a first-order objective (value + gradient) or a second-order one
+/// that additionally exposes an exact Hessian. Replacing the objective
+/// replaces the whole model, so a stale Hessian can never survive a
+/// first-order replacement.
+enum ObjectiveModel {
+    FirstOrder(Box<dyn Objective>),
+    SecondOrder(Box<dyn crate::optimization::ObjectiveHessian>),
+}
+
+impl ObjectiveModel {
+    fn objective(&self) -> &dyn Objective {
+        match self {
+            Self::FirstOrder(o) => o.as_ref(),
+            Self::SecondOrder(o) => o.as_ref(),
+        }
+    }
+
+    fn hessian(&self) -> Option<&dyn crate::optimization::ObjectiveHessian> {
+        match self {
+            Self::FirstOrder(_) => None,
+            Self::SecondOrder(o) => Some(o.as_ref()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ConstraintSystem
 // ---------------------------------------------------------------------------
 
@@ -166,16 +197,17 @@ pub struct ConstraintSystem {
     /// Free list of reusable constraint slots.
     constraint_free_list: Vec<u32>,
     // --- Optimization extension ---
-    /// Objective function to minimize (None = constraint-satisfaction only).
-    objective: Option<Box<dyn Objective>>,
-    /// Optional exact Hessian for the objective (enables exact trust-region steps).
-    objective_hessian: Option<Box<dyn crate::optimization::ObjectiveHessian>>,
+    /// Objective to minimize (None = constraint-satisfaction only).
+    objective: Option<ObjectiveModel>,
     /// Inequality constraints h(x) ≤ 0.
     inequalities: Vec<Option<Box<dyn InequalityFn>>>,
     /// Configuration for optimization solvers.
     opt_config: OptimizationConfig,
     /// Multipliers from the last optimization solve.
     last_multipliers: MultiplierStore,
+    /// Structural fingerprint of the problem the last multipliers belong to.
+    /// Warm-start multipliers are only reused when the fingerprint matches.
+    last_problem_fingerprint: Option<u64>,
 }
 
 impl Default for ConstraintSystem {
@@ -200,10 +232,10 @@ impl ConstraintSystem {
             constraint_generations: Vec::new(),
             constraint_free_list: Vec::new(),
             objective: None,
-            objective_hessian: None,
             inequalities: Vec::new(),
             opt_config: OptimizationConfig::default(),
             last_multipliers: MultiplierStore::new(),
+            last_problem_fingerprint: None,
         }
     }
 
@@ -470,17 +502,52 @@ impl ConstraintSystem {
     }
 
     fn certify_final_residuals(&self, result: &mut SystemResult) {
+        let tolerance = self.config.final_residual_tolerance;
+        let constraint_clusters = self.pipeline.constraint_cluster_map();
+        // Residual norm each cluster claims for its solution — but only for
+        // clusters claiming success. A NotConverged cluster admits failure,
+        // so its constraints are certified against the tolerance alone.
+        let reported: std::collections::HashMap<crate::id::ClusterId, f64> = result
+            .clusters
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.status,
+                    ClusterSolveStatus::Converged | ClusterSolveStatus::Skipped
+                )
+            })
+            .map(|c| (c.cluster_id, c.residual_norm))
+            .collect();
+
         let mut max_residual = 0.0_f64;
         let mut failing_constraints = Vec::new();
 
-        for constraint in self.constraints.iter().filter_map(|c| c.as_deref()) {
+        for (idx, constraint) in self
+            .constraints
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.as_deref().map(|c| (i, c)))
+        {
             let local_max = constraint
                 .residuals(&self.params)
                 .into_iter()
                 .map(f64::abs)
                 .fold(0.0_f64, f64::max);
             max_residual = max_residual.max(local_max);
-            if local_max > self.config.final_residual_tolerance {
+
+            // A constraint fails certification when its residual exceeds the
+            // tolerance AND exceeds what its cluster's solve reported. The
+            // second condition keeps legitimate least-squares minima (over-
+            // determined clusters converge with non-zero residual, which the
+            // cluster reports) while still catching cached, skipped, or
+            // stale-cascade solutions whose store state is worse than the
+            // reported result.
+            let reported_norm = constraint_clusters
+                .get(&idx)
+                .and_then(|cid| reported.get(cid))
+                .copied()
+                .unwrap_or(0.0);
+            if local_max > tolerance && local_max > reported_norm * (1.0 + 1e-9) + tolerance {
                 failing_constraints.push(constraint.id());
             }
         }
@@ -602,30 +669,32 @@ impl ConstraintSystem {
     /// Set the objective function to minimize.
     ///
     /// Only one objective is supported at a time. Setting a new objective
-    /// replaces the previous one.
+    /// replaces the previous one entirely, including any exact Hessian
+    /// installed via [`set_objective_with_hessian`](Self::set_objective_with_hessian).
     pub fn set_objective(&mut self, objective: Box<dyn Objective>) {
-        self.objective = Some(objective);
+        self.objective = Some(ObjectiveModel::FirstOrder(objective));
     }
 
     /// Set an objective that also provides an exact Hessian.
     ///
-    /// When set, the trust-region solver uses exact Hessian-vector products
-    /// instead of the scaled-identity L-BFGS approximation, giving quadratic
-    /// convergence near the solution.
+    /// This installs one coherent objective used for both first- and
+    /// second-order evaluation: [`optimize`](Self::optimize) minimizes it
+    /// like any other objective, and the trust-region solver additionally
+    /// uses its exact Hessian instead of the L-BFGS approximation, giving
+    /// quadratic convergence near the solution.
     pub fn set_objective_with_hessian(
         &mut self,
         objective: Box<dyn crate::optimization::ObjectiveHessian>,
     ) {
-        self.objective_hessian = Some(objective);
+        self.objective = Some(ObjectiveModel::SecondOrder(objective));
     }
 
     /// Remove the objective function (revert to constraint-satisfaction only).
     pub fn clear_objective(&mut self) {
         self.objective = None;
-        self.objective_hessian = None;
     }
 
-    /// Whether an objective function is set.
+    /// Whether an objective function is set (first- or second-order).
     pub fn has_objective(&self) -> bool {
         self.objective.is_some()
     }
@@ -656,20 +725,69 @@ impl ConstraintSystem {
         &self.opt_config
     }
 
+    /// Structural fingerprint of the optimization problem: which objective
+    /// and which equality/inequality constraints it consists of. Used to
+    /// prevent warm-start multipliers from being reused across a different
+    /// problem.
+    fn problem_fingerprint(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let model = self.objective.as_ref()?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let oid = model.objective().id();
+        oid.raw_index().hash(&mut hasher);
+        matches!(model, ObjectiveModel::SecondOrder(_)).hash(&mut hasher);
+        for c in self.constraints.iter().filter_map(|c| c.as_deref()) {
+            c.id().raw_index().hash(&mut hasher);
+            c.id().generation.hash(&mut hasher);
+            c.equation_count().hash(&mut hasher);
+        }
+        0xFFu8.hash(&mut hasher); // separator between equalities and inequalities
+        for h in self.inequalities.iter().filter_map(|h| h.as_deref()) {
+            h.id().raw_index().hash(&mut hasher);
+            h.id().generation.hash(&mut hasher);
+            h.inequality_count().hash(&mut hasher);
+        }
+        Some(hasher.finish())
+    }
+
+    fn unsupported_structure(reason: &'static str) -> OptimizationResult {
+        OptimizationResult {
+            objective_value: f64::NAN,
+            status: OptimizationStatus::UnsupportedProblemStructure { reason },
+            outer_iterations: 0,
+            inner_iterations: 0,
+            kkt_residual: crate::optimization::KktResidual {
+                primal: f64::INFINITY,
+                dual: f64::INFINITY,
+                complementarity: f64::INFINITY,
+            },
+            multipliers: MultiplierStore::new(),
+            constraint_violations: Vec::new(),
+            duration: std::time::Duration::ZERO,
+        }
+    }
+
     /// Run constrained optimization: `min f(x) s.t. constraints`.
     ///
-    /// Requires an objective to be set via [`set_objective`](Self::set_objective).
+    /// Requires an objective to be set via [`set_objective`](Self::set_objective)
+    /// or [`set_objective_with_hessian`](Self::set_objective_with_hessian).
     /// Existing [`Constraint`] objects serve as equality constraints (`g(x) = 0`).
     /// [`InequalityFn`] objects serve as inequality constraints (`h(x) ≤ 0`).
     ///
     /// # Algorithm Selection
     ///
-    /// - No constraints → BFGS (unconstrained)
-    /// - Equality constraints only → ALM (with BFGS inner loop)
-    /// - Auto → selects based on problem structure
+    /// - Equality or inequality constraints → ALM (with BFGS/BFGS-B inner loop)
+    /// - Finite bounds only → BFGS-B
+    /// - Otherwise → BFGS
+    ///
+    /// Explicitly selecting an algorithm that cannot honor the registered
+    /// problem structure (e.g. BFGS with equality constraints present)
+    /// returns [`OptimizationStatus::UnsupportedProblemStructure`] without
+    /// modifying any parameters, instead of silently solving a different
+    /// problem.
     pub fn optimize(&mut self) -> OptimizationResult {
-        let objective = match &self.objective {
-            Some(obj) => obj.as_ref(),
+        let model = match &self.objective {
+            Some(model) => model,
             None => {
                 return OptimizationResult {
                     objective_value: f64::NAN,
@@ -687,6 +805,7 @@ impl ConstraintSystem {
                 };
             }
         };
+        let objective = model.objective();
 
         // Classify: check if we have equality constraints
         let eq_constraints: Vec<&dyn Constraint> = self
@@ -713,6 +832,50 @@ impl ConstraintSystem {
             .collect();
 
         let has_inequalities = !ineq_constraints.is_empty();
+
+        // Validate algorithm/problem compatibility before any solver touches
+        // parameter values.
+        match self.opt_config.algorithm {
+            OptimizationAlgorithm::Bfgs => {
+                if has_equalities || has_inequalities {
+                    return Self::unsupported_structure(
+                        "BFGS cannot honor equality/inequality constraints; use Auto or Alm",
+                    );
+                }
+                if has_finite_bounds {
+                    return Self::unsupported_structure(
+                        "BFGS ignores parameter bounds; use Auto or BfgsB",
+                    );
+                }
+            }
+            OptimizationAlgorithm::BfgsB => {
+                if has_equalities || has_inequalities {
+                    return Self::unsupported_structure(
+                        "BFGS-B cannot honor equality/inequality constraints; use Auto or Alm",
+                    );
+                }
+            }
+            OptimizationAlgorithm::TrustRegion => {
+                if has_equalities || has_inequalities {
+                    return Self::unsupported_structure(
+                        "trust region is unconstrained-only; use Auto or Alm",
+                    );
+                }
+                if has_finite_bounds {
+                    return Self::unsupported_structure(
+                        "trust region ignores parameter bounds; use Auto or BfgsB",
+                    );
+                }
+            }
+            OptimizationAlgorithm::Auto | OptimizationAlgorithm::Alm => {}
+        }
+
+        // Invalidate warm-start multipliers when the problem structure
+        // changed since they were produced.
+        let fingerprint = self.problem_fingerprint();
+        if fingerprint != self.last_problem_fingerprint {
+            self.last_multipliers = MultiplierStore::new();
+        }
 
         let algorithm = match self.opt_config.algorithm {
             OptimizationAlgorithm::Auto => {
@@ -751,9 +914,9 @@ impl ConstraintSystem {
                 )
             }
             OptimizationAlgorithm::TrustRegion => {
-                if let Some(ref hess_obj) = self.objective_hessian {
+                if let Some(hess_obj) = model.hessian() {
                     crate::solver::TrustRegionSolver::solve_with_hessian(
-                        hess_obj.as_ref(),
+                        hess_obj,
                         &mut self.params,
                         &self.opt_config,
                     )
@@ -770,11 +933,13 @@ impl ConstraintSystem {
             }
         };
 
-        // Store multipliers for post-solve access
+        // Store multipliers (and the problem they belong to) for post-solve
+        // access and warm starting.
         self.last_multipliers = MultiplierStore::new();
         for (mid, val) in result.multipliers.iter() {
             self.last_multipliers.set(mid, val);
         }
+        self.last_problem_fingerprint = fingerprint;
 
         result
     }
@@ -1309,6 +1474,252 @@ mod tests {
         // Removing the constraint is also a structural change
         system.remove_constraint(cid);
         assert!(system.change_tracker().has_structural_changes());
+    }
+
+    // -------------------------------------------------------------------
+    // Objective/Hessian API tests
+    // -------------------------------------------------------------------
+
+    use crate::optimization::{
+        Objective, ObjectiveHessian, ObjectiveId, OptimizationAlgorithm, OptimizationStatus,
+    };
+
+    /// f(x) = (x - target)^2
+    struct QuadObjective {
+        id_index: u32,
+        param: ParamId,
+        target: f64,
+    }
+
+    impl Objective for QuadObjective {
+        fn id(&self) -> ObjectiveId {
+            ObjectiveId::new(self.id_index, 0)
+        }
+        fn name(&self) -> &str {
+            "quad"
+        }
+        fn param_ids(&self) -> &[ParamId] {
+            std::slice::from_ref(&self.param)
+        }
+        fn value(&self, store: &ParamStore) -> f64 {
+            (store.get(self.param) - self.target).powi(2)
+        }
+        fn gradient(&self, store: &ParamStore) -> Vec<(ParamId, f64)> {
+            vec![(self.param, 2.0 * (store.get(self.param) - self.target))]
+        }
+    }
+
+    impl ObjectiveHessian for QuadObjective {
+        fn hessian_entries(&self, _store: &ParamStore) -> Vec<(ParamId, ParamId, f64)> {
+            vec![(self.param, self.param, 2.0)]
+        }
+    }
+
+    fn quad_system(target: f64) -> (ConstraintSystem, ParamId) {
+        let mut system = ConstraintSystem::new();
+        let eid = system.alloc_entity_id();
+        let p = system.alloc_param(0.0, eid);
+        let _ = target;
+        (system, p)
+    }
+
+    #[test]
+    fn hessian_objective_alone_is_optimizable() {
+        let (mut system, p) = quad_system(4.0);
+        system.set_objective_with_hessian(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 4.0,
+        }));
+        assert!(system.has_objective());
+        let result = system.optimize();
+        assert_eq!(result.status, OptimizationStatus::Converged);
+        assert!((system.get_param(p) - 4.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn set_objective_replaces_hessian_objective() {
+        let (mut system, p) = quad_system(4.0);
+        system.set_objective_with_hessian(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 4.0,
+        }));
+        // Replace with a first-order objective at a different target: the
+        // stale Hessian objective must not survive.
+        system.set_objective(Box::new(QuadObjective {
+            id_index: 1,
+            param: p,
+            target: -2.0,
+        }));
+        let result = system.optimize();
+        assert_eq!(result.status, OptimizationStatus::Converged);
+        assert!(
+            (system.get_param(p) + 2.0).abs() < 1e-4,
+            "expected new objective's minimum -2, got {}",
+            system.get_param(p)
+        );
+
+        // And the other replacement order: first-order then second-order.
+        system.set_param(p, 0.0);
+        system.set_objective_with_hessian(Box::new(QuadObjective {
+            id_index: 2,
+            param: p,
+            target: 7.0,
+        }));
+        let result = system.optimize();
+        assert_eq!(result.status, OptimizationStatus::Converged);
+        assert!((system.get_param(p) - 7.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn clear_objective_removes_both_orders() {
+        let (mut system, p) = quad_system(4.0);
+        system.set_objective_with_hessian(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 4.0,
+        }));
+        system.clear_objective();
+        assert!(!system.has_objective());
+        let result = system.optimize();
+        assert_eq!(result.status, OptimizationStatus::Infeasible);
+    }
+
+    #[test]
+    fn trust_region_uses_installed_hessian_objective() {
+        let (mut system, p) = quad_system(9.0);
+        system.set_objective_with_hessian(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 9.0,
+        }));
+        let mut config = crate::optimization::OptimizationConfig::default();
+        config.algorithm = OptimizationAlgorithm::TrustRegion;
+        system.set_opt_config(config);
+        let result = system.optimize();
+        assert_eq!(result.status, OptimizationStatus::Converged);
+        assert!((system.get_param(p) - 9.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn explicit_bfgs_with_equality_constraints_is_rejected() {
+        let (mut system, p) = quad_system(4.0);
+        system.set_objective(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 4.0,
+        }));
+        let eid = system.alloc_entity_id();
+        let cid = system.alloc_constraint_id();
+        system.add_constraint(Box::new(FixValueConstraint {
+            id: cid,
+            entity_ids: vec![eid],
+            param: p,
+            target: 1.0,
+        }));
+
+        let before = system.get_param(p);
+        let mut config = crate::optimization::OptimizationConfig::default();
+        config.algorithm = OptimizationAlgorithm::Bfgs;
+        system.set_opt_config(config);
+        let result = system.optimize();
+        assert!(
+            matches!(
+                result.status,
+                OptimizationStatus::UnsupportedProblemStructure { .. }
+            ),
+            "expected UnsupportedProblemStructure, got {:?}",
+            result.status
+        );
+        // Parameters must be untouched.
+        assert_eq!(system.get_param(p), before);
+    }
+
+    #[test]
+    fn explicit_trust_region_with_constraints_is_rejected() {
+        let (mut system, p) = quad_system(4.0);
+        system.set_objective(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 4.0,
+        }));
+        let eid = system.alloc_entity_id();
+        let cid = system.alloc_constraint_id();
+        system.add_constraint(Box::new(FixValueConstraint {
+            id: cid,
+            entity_ids: vec![eid],
+            param: p,
+            target: 1.0,
+        }));
+
+        let mut config = crate::optimization::OptimizationConfig::default();
+        config.algorithm = OptimizationAlgorithm::TrustRegion;
+        system.set_opt_config(config);
+        let result = system.optimize();
+        assert!(matches!(
+            result.status,
+            OptimizationStatus::UnsupportedProblemStructure { .. }
+        ));
+    }
+
+    #[test]
+    fn explicit_bfgs_with_bounds_is_rejected() {
+        let (mut system, p) = quad_system(4.0);
+        system.set_objective(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 4.0,
+        }));
+        system.params_mut().set_bounds(p, 0.0, 1.0);
+
+        let mut config = crate::optimization::OptimizationConfig::default();
+        config.algorithm = OptimizationAlgorithm::Bfgs;
+        system.set_opt_config(config);
+        let result = system.optimize();
+        assert!(matches!(
+            result.status,
+            OptimizationStatus::UnsupportedProblemStructure { .. }
+        ));
+    }
+
+    #[test]
+    fn replacing_objective_invalidates_warm_start_multipliers() {
+        // Solve a constrained problem, then swap the objective. The stored
+        // multipliers must not be handed to the next solve as a warm start
+        // for a structurally different problem.
+        let (mut system, p) = quad_system(4.0);
+        system.set_objective(Box::new(QuadObjective {
+            id_index: 0,
+            param: p,
+            target: 4.0,
+        }));
+        let eid = system.alloc_entity_id();
+        let cid = system.alloc_constraint_id();
+        system.add_constraint(Box::new(FixValueConstraint {
+            id: cid,
+            entity_ids: vec![eid],
+            param: p,
+            target: 1.0,
+        }));
+        let mut config = crate::optimization::OptimizationConfig::default();
+        config.multiplier_init = crate::optimization::MultiplierInitStrategy::WarmStart;
+        system.set_opt_config(config);
+
+        let r1 = system.optimize();
+        assert_eq!(r1.status, OptimizationStatus::Converged);
+        assert!(system.multiplier(cid).is_some());
+
+        // New objective (different id) — same constraint set. The next
+        // solve must start from clean multipliers and still converge.
+        system.set_objective(Box::new(QuadObjective {
+            id_index: 5,
+            param: p,
+            target: -10.0,
+        }));
+        let r2 = system.optimize();
+        assert_eq!(r2.status, OptimizationStatus::Converged);
+        assert!((system.get_param(p) - 1.0).abs() < 1e-3);
     }
 
     #[test]

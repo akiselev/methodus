@@ -31,6 +31,16 @@ pub enum OptimizationStatus {
     Infeasible,
     /// Solver diverged (multipliers or objective exploded).
     Diverged,
+    /// The penalty parameter saturated without further feasibility progress.
+    Stalled,
+    /// A line search failed to make progress; the reported point is the best found.
+    LineSearchFailed,
+    /// The selected algorithm cannot solve the registered problem structure
+    /// (e.g. BFGS explicitly selected while equality constraints exist).
+    UnsupportedProblemStructure {
+        /// Human-readable description of the mismatch.
+        reason: &'static str,
+    },
     /// Optimization not yet implemented (stub).
     NotImplemented,
 }

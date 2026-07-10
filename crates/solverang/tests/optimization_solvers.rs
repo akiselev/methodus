@@ -1898,3 +1898,225 @@ fn trust_region_exact_hessian_quadratic_1step() {
         result.outer_iterations
     );
 }
+
+// =========================================================================
+// ALM correctness tests (P0 §4)
+// =========================================================================
+
+#[test]
+fn alm_contradictory_constraints_report_infeasible() {
+    // x + y = 1 and x + y = 3 cannot both hold. ALM must detect the
+    // saturated penalty with stagnant violation and report Infeasible,
+    // not a generic iteration limit.
+    let owner = EntityId::new(0, 0);
+    let mut store = ParamStore::new();
+    let px = store.alloc(0.0, owner);
+    let py = store.alloc(0.0, owner);
+
+    let obj = Quad2DTarget {
+        params: [px, py],
+        target: [0.0, 0.0],
+    };
+    let c1 = LinearEqualityConstraint::new(ConstraintId::new(0, 0), px, py, 1.0);
+    let c2 = LinearEqualityConstraint::new(ConstraintId::new(1, 0), px, py, 3.0);
+    let constraints: Vec<&dyn Constraint> = vec![&c1, &c2];
+
+    let mut config = OptimizationConfig::default();
+    config.max_outer_iterations = 200;
+
+    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+
+    assert!(
+        matches!(
+            result.status,
+            OptimizationStatus::Infeasible | OptimizationStatus::Stalled
+        ),
+        "contradictory constraints must yield Infeasible/Stalled, got {:?} (kkt={:?})",
+        result.status,
+        result.kkt_residual
+    );
+    assert!(result.kkt_residual.primal > 1e-3);
+}
+
+#[test]
+fn alm_zero_free_variables_checks_feasibility() {
+    // All parameters fixed at a point violating the constraint: the solver
+    // must not report Converged.
+    let owner = EntityId::new(0, 0);
+    let mut store = ParamStore::new();
+    let px = store.alloc(0.0, owner);
+    let py = store.alloc(0.0, owner);
+    store.fix(px);
+    store.fix(py);
+
+    let obj = Quad2DTarget {
+        params: [px, py],
+        target: [0.0, 0.0],
+    };
+    let c = LinearEqualityConstraint::new(ConstraintId::new(0, 0), px, py, 5.0);
+    let constraints: Vec<&dyn Constraint> = vec![&c];
+
+    let config = OptimizationConfig::default();
+    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+
+    assert_eq!(
+        result.status,
+        OptimizationStatus::Infeasible,
+        "violated constraints on fully fixed params must be Infeasible"
+    );
+    assert!(result.kkt_residual.primal > 1.0);
+
+    // Same setup but at a feasible point: converged.
+    let mut store2 = ParamStore::new();
+    let px2 = store2.alloc(2.0, owner);
+    let py2 = store2.alloc(3.0, owner);
+    store2.fix(px2);
+    store2.fix(py2);
+    let obj2 = Quad2DTarget {
+        params: [px2, py2],
+        target: [0.0, 0.0],
+    };
+    let c2 = LinearEqualityConstraint::new(ConstraintId::new(0, 0), px2, py2, 5.0);
+    let constraints2: Vec<&dyn Constraint> = vec![&c2];
+    let result2 = AlmSolver::solve(&obj2, &constraints2, &[], &mut store2, &config, None);
+    assert_eq!(result2.status, OptimizationStatus::Converged);
+}
+
+#[test]
+fn alm_inequality_only_grows_penalty_and_converges() {
+    // min (x-5)^2 s.t. x <= 1: solution x = 1 with active inequality.
+    // The penalty update must be driven by the inequality violation alone.
+    let owner = EntityId::new(0, 0);
+    let mut store = ParamStore::new();
+    let px = store.alloc(4.0, owner);
+    let py = store.alloc(0.0, owner);
+
+    let obj = Quad2DTarget {
+        params: [px, py],
+        target: [5.0, 0.0],
+    };
+    let ineq = LinearInequalityConstraint::new(ConstraintId::new(0, 0), px, py, 1.0, 0.0, 1.0);
+    let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
+
+    let mut config = OptimizationConfig::default();
+    config.max_outer_iterations = 100;
+
+    let result = AlmSolver::solve(&obj, &[], &inequalities, &mut store, &config, None);
+
+    assert!(
+        result.status.is_converged(),
+        "status={:?}, kkt={:?}",
+        result.status,
+        result.kkt_residual
+    );
+    assert!(
+        (store.get(px) - 1.0).abs() < 1e-3,
+        "x = {}, expected 1.0",
+        store.get(px)
+    );
+    // Active constraint: μ = -df/dx = 8 > 0 (dual feasibility).
+    let mu = result
+        .multipliers
+        .lambda_for_constraint(ConstraintId::new(0, 0))
+        .expect("inequality multiplier missing");
+    assert!(mu[0] >= 0.0, "dual feasibility violated: μ = {}", mu[0]);
+    assert!(
+        (mu[0] - 8.0).abs() < 0.5,
+        "expected μ ≈ 8 for the active bound, got {}",
+        mu[0]
+    );
+    // Inequality values must be reported in constraint_violations.
+    assert_eq!(result.constraint_violations.len(), 1);
+}
+
+#[test]
+fn alm_mixed_bounds_equalities_inequalities() {
+    // min (x-3)^2 + (y-4)^2
+    // s.t. x + y = 5 (equality), x <= 2 (inequality), 0 <= x,y <= 10 (bounds)
+    // Optimum: x = 2, y = 3.
+    let owner = EntityId::new(0, 0);
+    let mut store = ParamStore::new();
+    let px = store.alloc(1.0, owner);
+    let py = store.alloc(1.0, owner);
+    store.set_bounds(px, 0.0, 10.0);
+    store.set_bounds(py, 0.0, 10.0);
+
+    let obj = Quad2DTarget {
+        params: [px, py],
+        target: [3.0, 4.0],
+    };
+    let eq = LinearEqualityConstraint::new(ConstraintId::new(0, 0), px, py, 5.0);
+    let constraints: Vec<&dyn Constraint> = vec![&eq];
+    let ineq = LinearInequalityConstraint::new(ConstraintId::new(1, 0), px, py, 1.0, 0.0, 2.0);
+    let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
+
+    let mut config = OptimizationConfig::default();
+    config.max_outer_iterations = 100;
+
+    let result = AlmSolver::solve(&obj, &constraints, &inequalities, &mut store, &config, None);
+
+    assert!(
+        result.status.is_converged(),
+        "status={:?}, kkt={:?}",
+        result.status,
+        result.kkt_residual
+    );
+    assert!(
+        (store.get(px) - 2.0).abs() < 1e-3,
+        "x = {}, expected 2.0",
+        store.get(px)
+    );
+    assert!(
+        (store.get(py) - 3.0).abs() < 1e-3,
+        "y = {}, expected 3.0",
+        store.get(py)
+    );
+    // Violations vector covers equalities followed by inequalities.
+    assert_eq!(result.constraint_violations.len(), 2);
+    // Inequality multiplier must be nonnegative.
+    let mu = result
+        .multipliers
+        .lambda_for_constraint(ConstraintId::new(1, 0))
+        .expect("inequality multiplier missing");
+    assert!(mu[0] >= 0.0);
+}
+
+#[test]
+fn alm_warm_started_negative_inequality_multiplier_is_clamped() {
+    // Seed a warm-start store with an invalid negative μ; the solver must
+    // clamp it to zero rather than propagate an infeasible dual.
+    let owner = EntityId::new(0, 0);
+    let mut store = ParamStore::new();
+    let px = store.alloc(4.0, owner);
+    let py = store.alloc(0.0, owner);
+
+    let obj = Quad2DTarget {
+        params: [px, py],
+        target: [5.0, 0.0],
+    };
+    let cid = ConstraintId::new(0, 0);
+    let ineq = LinearInequalityConstraint::new(cid, px, py, 1.0, 0.0, 1.0);
+    let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
+
+    let mut warm = MultiplierStore::new();
+    warm.set(solverang::optimization::MultiplierId::new(cid, 0), -50.0);
+
+    let mut config = OptimizationConfig::default();
+    config.multiplier_init = MultiplierInitStrategy::WarmStart;
+    config.max_outer_iterations = 100;
+
+    let result = AlmSolver::solve(&obj, &[], &inequalities, &mut store, &config, Some(&warm));
+
+    assert!(
+        result.status.is_converged(),
+        "status={:?}, kkt={:?}",
+        result.status,
+        result.kkt_residual
+    );
+    let mu = result
+        .multipliers
+        .lambda_for_constraint(cid)
+        .expect("multiplier missing");
+    assert!(mu[0] >= 0.0, "μ must remain nonnegative, got {}", mu[0]);
+    assert!((store.get(px) - 1.0).abs() < 1e-3);
+}

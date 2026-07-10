@@ -61,6 +61,8 @@ pub struct OptimizationConfig {
     pub line_search_backtrack: f64,
     /// Minimum line search step size before declaring failure.
     pub line_search_min_step: f64,
+    /// Maximum combined function + gradient evaluations per line search.
+    pub line_search_max_evals: usize,
     /// Use relative tolerances for convergence checks.
     ///
     /// When `true`, BFGS scales the gradient norm by `max(1.0, |f|)` and ALM
@@ -95,6 +97,7 @@ impl Default for OptimizationConfig {
             wolfe_c2: 0.9,
             line_search_backtrack: 0.5,
             line_search_min_step: 1e-12,
+            line_search_max_evals: 100,
             relative_tolerance: true,
             trust_region_init: 1.0,
             trust_region_max: 100.0,

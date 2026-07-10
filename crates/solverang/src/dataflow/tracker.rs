@@ -199,15 +199,19 @@ impl ChangeTracker {
     ///
     /// Parameters not found in the mapping are silently ignored (they may
     /// belong to fixed parameters or entities not yet assigned to a cluster).
+    ///
+    /// The mapping is one-to-many: a parameter can be referenced by several
+    /// clusters (e.g. a fixed parameter substituted into multiple clusters),
+    /// and all of them become dirty when it changes.
     pub fn compute_dirty_clusters(
         &self,
-        param_to_cluster: &HashMap<ParamId, ClusterId>,
+        param_to_clusters: &HashMap<ParamId, Vec<ClusterId>>,
     ) -> HashSet<ClusterId> {
         let mut result = self.dirty_clusters.clone();
 
         for param_id in &self.dirty_params {
-            if let Some(&cluster_id) = param_to_cluster.get(param_id) {
-                result.insert(cluster_id);
+            if let Some(cluster_ids) = param_to_clusters.get(param_id) {
+                result.extend(cluster_ids.iter().copied());
             }
         }
 
@@ -368,9 +372,9 @@ mod tests {
         tracker.mark_param_dirty(param(2));
 
         let mut mapping = HashMap::new();
-        mapping.insert(param(0), ClusterId(0));
-        mapping.insert(param(1), ClusterId(0)); // same cluster as param 0
-        mapping.insert(param(2), ClusterId(1));
+        mapping.insert(param(0), vec![ClusterId(0)]);
+        mapping.insert(param(1), vec![ClusterId(0)]); // same cluster as param 0
+        mapping.insert(param(2), vec![ClusterId(1)]);
         // param(3) is not dirty, should not appear
 
         let dirty = tracker.compute_dirty_clusters(&mapping);
@@ -387,7 +391,7 @@ mod tests {
         tracker.mark_cluster_dirty(ClusterId(5));
 
         let mut mapping = HashMap::new();
-        mapping.insert(param(0), ClusterId(2));
+        mapping.insert(param(0), vec![ClusterId(2)]);
 
         let dirty = tracker.compute_dirty_clusters(&mapping);
 

@@ -118,11 +118,14 @@ compiler warnings in unrelated modules/tests.
 
 ## Known Issues
 
-1. **Decomposition cascading** -- when the solver decomposes into sub-clusters,
-   solutions from earlier clusters don't always propagate to dependent clusters.
-   Final residual certification now prevents `SystemStatus::Solved` from being
-   returned when post-solve residuals remain above tolerance, but the underlying
-   decomposition propagation still needs a deeper fix.
+1. **Decomposition cascading** -- fixed (2026-07-10). The pipeline builds a
+   one-to-many param -> clusters dependency map from each cluster's constraint
+   parameters, marks dependent clusters dirty when a solve changes a shared or
+   substituted parameter, and iterates to a fixed point bounded by the cluster
+   count. Final residual certification remains as the backstop: `Solved` is
+   never reported when a constraint's residual exceeds both the tolerance and
+   what its cluster reported (the latter condition preserves legitimate
+   least-squares minima on over-determined clusters).
 
 ## Documentation
 

@@ -1,13 +1,27 @@
-//! Augmented Lagrangian Method (ALM) for equality-constrained optimization.
+//! Augmented Lagrangian Method (ALM) for constrained optimization.
 //!
-//! Solves `min f(x) s.t. g(x) = 0` by converting to a sequence of
-//! unconstrained-like subproblems that the existing LM solver handles.
+//! Solves `min f(x) s.t. g(x) = 0, h(x) ≤ 0` by minimizing a sequence of
+//! augmented Lagrangian subproblems with an inner quasi-Newton solver
+//! (L-BFGS, or L-BFGS-B when free parameters carry finite bounds).
 //!
 //! The augmented Lagrangian is:
-//!   L_A(x, λ, ρ) = f(x) + λ^T g(x) + (ρ/2) ||g(x)||^2
 //!
-//! The ALM outer loop updates multipliers (λ) and penalty (ρ), while the
-//! inner loop minimizes L_A using LMSolver on a least-squares formulation.
+//! ```text
+//! L_A(x, λ, μ, ρ) = f(x) + λᵀg(x) + (ρ/2)‖g(x)‖²
+//!                 + Σ_j (ρ/2)[max(0, h_j(x) + μ_j/ρ)² − (μ_j/ρ)²]
+//! ```
+//!
+//! The outer loop updates equality multipliers `λ ← λ + ρ g(x)`, inequality
+//! multipliers `μ ← max(0, μ + ρ h(x))` (kept nonnegative for dual
+//! feasibility), and grows the penalty ρ when the combined equality +
+//! inequality violation does not shrink fast enough.
+//!
+//! Convergence requires all KKT components: primal feasibility, stationarity
+//! of the original Lagrangian `∇f + J_gᵀλ + J_hᵀμ`, dual feasibility
+//! (`μ ≥ 0`, enforced by construction), and complementarity `|μ_j h_j| ≈ 0`.
+//! Contradictory constraints are detected as a saturated penalty with
+//! stagnant violation and reported as `Infeasible` rather than a generic
+//! iteration limit.
 
 use std::time::Instant;
 
@@ -34,6 +48,101 @@ fn compute_complementarity(
     comp
 }
 
+/// Equality residuals followed by inequality values, in registration order.
+fn collect_violations(
+    constraints: &[&dyn Constraint],
+    inequalities: &[&dyn InequalityFn],
+    store: &ParamStore,
+) -> Vec<f64> {
+    let mut v: Vec<f64> = constraints
+        .iter()
+        .flat_map(|c| c.residuals(store))
+        .collect();
+    v.extend(inequalities.iter().flat_map(|h| h.values(store)));
+    v
+}
+
+/// Combined primal violation: `sqrt(‖g‖² + ‖max(0, h)‖²)`.
+fn combined_violation(
+    constraints: &[&dyn Constraint],
+    inequalities: &[&dyn InequalityFn],
+    store: &ParamStore,
+) -> f64 {
+    let eq_sq: f64 = constraints
+        .iter()
+        .flat_map(|c| c.residuals(store))
+        .map(|r| r * r)
+        .sum();
+    let ineq_sq: f64 = inequalities
+        .iter()
+        .flat_map(|h| h.values(store))
+        .map(|v| v.max(0.0).powi(2))
+        .sum();
+    (eq_sq + ineq_sq).sqrt()
+}
+
+/// Stationarity of the original Lagrangian: `‖∇f + J_gᵀλ + J_hᵀμ‖`.
+fn lagrangian_stationarity(
+    objective: &dyn Objective,
+    constraints: &[&dyn Constraint],
+    inequalities: &[&dyn InequalityFn],
+    lambda: &[f64],
+    mu: &[f64],
+    param_ids: &[crate::id::ParamId],
+    store: &ParamStore,
+) -> f64 {
+    let n = param_ids.len();
+    let mut grad_l = vec![0.0; n];
+    for (pid, val) in objective.gradient(store) {
+        if let Some(col) = param_ids.iter().position(|&p| p == pid) {
+            grad_l[col] = val;
+        }
+    }
+    let mut eq_offset = 0;
+    for c in constraints {
+        for (row, pid, val) in c.jacobian(store) {
+            if let Some(col) = param_ids.iter().position(|&p| p == pid) {
+                grad_l[col] += lambda[eq_offset + row] * val;
+            }
+        }
+        eq_offset += c.equation_count();
+    }
+    let mut ineq_offset = 0;
+    for h in inequalities {
+        for (row, pid, val) in h.jacobian(store) {
+            if let Some(col) = param_ids.iter().position(|&p| p == pid) {
+                grad_l[col] += mu[ineq_offset + row] * val;
+            }
+        }
+        ineq_offset += h.inequality_count();
+    }
+    grad_l.iter().map(|g| g * g).sum::<f64>().sqrt()
+}
+
+fn build_multiplier_store(
+    constraints: &[&dyn Constraint],
+    inequalities: &[&dyn InequalityFn],
+    lambda: &[f64],
+    mu: &[f64],
+) -> MultiplierStore {
+    let mut store = MultiplierStore::new();
+    let mut eq_idx = 0;
+    for c in constraints {
+        for row in 0..c.equation_count() {
+            store.set(MultiplierId::new(c.id(), row), lambda[eq_idx]);
+            eq_idx += 1;
+        }
+    }
+    let mut ineq_idx = 0;
+    for h in inequalities {
+        for row in 0..h.inequality_count() {
+            store.set(MultiplierId::new(h.id(), row), mu[ineq_idx]);
+            ineq_idx += 1;
+        }
+    }
+    store
+}
+
 /// Augmented Lagrangian Method solver.
 pub struct AlmSolver;
 
@@ -46,11 +155,14 @@ impl AlmSolver {
     ///
     /// # Algorithm
     ///
-    /// 1. Formulate augmented Lagrangian L_A as a least-squares problem
-    /// 2. Solve inner subproblem with LMSolver
-    /// 3. Update multipliers: λ_{k+1} = λ_k + ρ * g(x_k)
-    /// 4. Optionally increase ρ if constraint violation doesn't decrease
-    /// 5. Check KKT convergence (primal + dual feasibility)
+    /// 1. Minimize the augmented Lagrangian with L-BFGS (or L-BFGS-B when
+    ///    free parameters have finite bounds).
+    /// 2. Update multipliers: `λ ← λ + ρ g(x)`, `μ ← max(0, μ + ρ h(x))`.
+    /// 3. Grow ρ if the combined equality + inequality violation stagnates.
+    /// 4. Check the full KKT system (primal, stationarity, complementarity;
+    ///    dual feasibility `μ ≥ 0` holds by construction).
+    /// 5. Report `Infeasible` when ρ saturates without feasibility progress,
+    ///    and propagate inner-solver failures instead of iterating blindly.
     pub fn solve(
         objective: &dyn Objective,
         constraints: &[&dyn Constraint],
@@ -63,31 +175,37 @@ impl AlmSolver {
         let mapping = store.build_solver_mapping();
         let n = mapping.len();
 
+        // Count total equality / inequality equations.
+        let total_eq: usize = constraints.iter().map(|c| c.equation_count()).sum();
+        let total_ineq: usize = inequalities.iter().map(|h| h.inequality_count()).sum();
+
         if n == 0 {
-            let f = objective.value(store);
+            // No free variables: nothing to optimize, but the fixed point
+            // must still satisfy the constraints to count as converged.
+            let violations = collect_violations(constraints, inequalities, store);
+            let primal = combined_violation(constraints, inequalities, store);
+            let status = if primal <= config.outer_tolerance {
+                OptimizationStatus::Converged
+            } else {
+                OptimizationStatus::Infeasible
+            };
             return OptimizationResult {
-                objective_value: f,
-                status: OptimizationStatus::Converged,
+                objective_value: objective.value(store),
+                status,
                 outer_iterations: 0,
                 inner_iterations: 0,
                 kkt_residual: KktResidual {
-                    primal: 0.0,
+                    primal,
                     dual: 0.0,
                     complementarity: 0.0,
                 },
                 multipliers: MultiplierStore::new(),
-                constraint_violations: Vec::new(),
+                constraint_violations: violations,
                 duration: start.elapsed(),
             };
         }
 
         let param_ids = mapping.col_to_param.clone();
-
-        // Count total equality equations
-        let total_eq: usize = constraints.iter().map(|c| c.equation_count()).sum();
-
-        // Count inequality equations
-        let total_ineq: usize = inequalities.iter().map(|h| h.inequality_count()).sum();
 
         // Dispatch inner loop to BFGS-B if any free parameter has finite bounds.
         let use_bfgs_b = store.any_free_finite_bounds();
@@ -97,21 +215,28 @@ impl AlmSolver {
             (MultiplierInitStrategy::WarmStart, Some(ms)) => ms.extract_equality_vec(constraints),
             _ => vec![0.0; total_eq],
         };
-        // Inequality multipliers must be >= 0
         let mut mu = match (&config.multiplier_init, &warm_start) {
             (MultiplierInitStrategy::WarmStart, Some(ms)) => {
                 ms.extract_inequality_vec(inequalities)
             }
             _ => vec![0.0; total_ineq],
         };
+        // Dual feasibility requires μ ≥ 0: clamp warm-started (or otherwise
+        // invalid) inequality multipliers.
+        for m in &mut mu {
+            *m = m.max(0.0).min(config.max_multiplier);
+        }
+        for l in &mut lambda {
+            *l = l.clamp(-config.max_multiplier, config.max_multiplier);
+        }
+
         let mut rho = config.rho_init;
         let mut prev_violation = f64::INFINITY;
+        let mut stalled_outers = 0usize;
         let mut total_inner_iters = 0;
 
         for outer_iter in 0..config.max_outer_iterations {
-            // Build the augmented Lagrangian as an Objective for BfgsSolver
-            // L_A(x) = f(x) + λ^T g(x) + (ρ/2) ||g(x)||^2
-            //        + Σ_ineq (ρ/2) [max(0, h_j + μ_j/ρ)² - (μ_j/ρ)²]
+            // Build the augmented Lagrangian as an Objective for the inner solver.
             let alm_objective = AugmentedLagrangianObjective {
                 objective,
                 constraints,
@@ -122,7 +247,6 @@ impl AlmSolver {
                 rho,
             };
 
-            // Solve inner subproblem with BFGS or BFGS-B depending on bounds.
             let inner_config = OptimizationConfig {
                 max_outer_iterations: config.max_inner_iterations,
                 dual_tolerance: config.inner_tolerance,
@@ -136,172 +260,187 @@ impl AlmSolver {
 
             total_inner_iters += inner_result.outer_iterations;
 
-            // Evaluate constraint violations
-            let mut violations = Vec::with_capacity(total_eq);
+            // Propagate hard inner-solver failures instead of continuing to
+            // update multipliers against a bogus iterate. An inner iteration
+            // limit is expected (subproblems are solved loosely early on),
+            // and a line-search failure still leaves the store at the best
+            // point found (handled by the stall counter below); divergence
+            // or non-finite values are fatal.
+            if matches!(inner_result.status, OptimizationStatus::Diverged)
+                || !inner_result.objective_value.is_finite()
+            {
+                return OptimizationResult {
+                    objective_value: objective.value(store),
+                    status: OptimizationStatus::Diverged,
+                    outer_iterations: outer_iter + 1,
+                    inner_iterations: total_inner_iters,
+                    kkt_residual: KktResidual {
+                        primal: combined_violation(constraints, inequalities, store),
+                        dual: f64::INFINITY,
+                        complementarity: compute_complementarity(inequalities, &mu, store),
+                    },
+                    multipliers: build_multiplier_store(constraints, inequalities, &lambda, &mu),
+                    constraint_violations: collect_violations(constraints, inequalities, store),
+                    duration: start.elapsed(),
+                };
+            }
+            let inner_line_search_failed =
+                matches!(inner_result.status, OptimizationStatus::LineSearchFailed);
+
+            // First-order multiplier updates (Hestenes-Powell):
+            //   λ ← λ + ρ g(x),  μ ← max(0, μ + ρ h(x)).
+            // The updated multipliers are also the ones for which the inner
+            // solve's stationary point satisfies ∇f + J_gᵀλ + J_hᵀμ ≈ 0, so
+            // KKT stationarity is checked against them below.
+            let mut lambda_new = lambda.clone();
+            let mut eq_idx = 0;
             for c in constraints {
-                violations.extend(c.residuals(store));
-            }
-            let violation_norm: f64 = violations.iter().map(|v| v * v).sum::<f64>().sqrt();
-
-            // Dual feasibility: ∇_x L = ∇f + Σ λ_i ∇g_i + ρ Σ g_i ∇g_i
-            // After the inner solve converges, ∇_x L_A ≈ 0, so we estimate
-            // dual feasibility from the inner solver's residual norm.
-            // A more accurate check: ∇f + J^T (λ + ρ g)
-            let obj_grad = objective.gradient(store);
-            let mut grad_l = vec![0.0; n];
-            for (pid, val) in &obj_grad {
-                if let Some(col) = param_ids.iter().position(|p| p == pid) {
-                    grad_l[col] = *val;
+                for r in c.residuals(store) {
+                    lambda_new[eq_idx] = (lambda_new[eq_idx] + rho * r)
+                        .clamp(-config.max_multiplier, config.max_multiplier);
+                    eq_idx += 1;
                 }
             }
-            // Add J^T (λ + ρ g) contribution from equality constraints
-            let mut eq_offset = 0;
-            for (_ci, c) in constraints.iter().enumerate() {
-                let jac = c.jacobian(store);
-                let resid = c.residuals(store);
-                let eq_count = c.equation_count();
-                for (row, pid, val) in &jac {
-                    if let Some(col) = param_ids.iter().position(|p| p == pid) {
-                        let dual_coeff = lambda[eq_offset + row] + rho * resid[*row];
-                        grad_l[col] += dual_coeff * val;
-                    }
-                }
-                eq_offset += eq_count;
-            }
-            // Add J_h^T * max(0, μ + ρ·h) contribution from inequality constraints
-            let mut ineq_offset = 0;
+            let mut mu_new = mu.clone();
+            let mut ineq_idx = 0;
             for h in inequalities {
-                let vals = h.values(store);
-                let jac = h.jacobian(store);
-                for (row, pid, val) in jac {
-                    if let Some(col) = param_ids.iter().position(|p| *p == pid) {
-                        let shifted = mu[ineq_offset + row] + rho * vals[row];
-                        if shifted > 0.0 {
-                            grad_l[col] += shifted * val;
-                        }
-                    }
+                for v in h.values(store) {
+                    mu_new[ineq_idx] = (mu_new[ineq_idx] + rho * v)
+                        .max(0.0)
+                        .min(config.max_multiplier);
+                    ineq_idx += 1;
                 }
-                ineq_offset += vals.len();
             }
-            let dual_norm: f64 = grad_l.iter().map(|g| g * g).sum::<f64>().sqrt();
 
-            // Primal feasibility: max(eq_violation, max_ineq_violation)
-            let ineq_violation: f64 = inequalities
-                .iter()
-                .flat_map(|h| h.values(store))
-                .map(|v| v.max(0.0))
-                .fold(0.0_f64, f64::max);
-            let primal_violation = violation_norm.max(ineq_violation);
+            // --- Full KKT assessment at the current iterate ---
 
-            // Complementarity: max |μ_j * h_j(x)|
-            let complementarity = compute_complementarity(inequalities, &mu, store);
+            // Primal feasibility (combined equality + inequality violation).
+            let violation_norm = combined_violation(constraints, inequalities, store);
 
-            // Check convergence
-            let (primal_check, dual_check) = if config.relative_tolerance {
+            // Stationarity of the original Lagrangian with the updated
+            // multipliers.
+            let dual_norm = lagrangian_stationarity(
+                objective,
+                constraints,
+                inequalities,
+                &lambda_new,
+                &mu_new,
+                &param_ids,
+                store,
+            );
+
+            // Complementarity with the updated (dual-feasible) multipliers.
+            let complementarity = compute_complementarity(inequalities, &mu_new, store);
+
+            let (primal_check, dual_check, comp_check) = if config.relative_tolerance {
                 let total_constraints = total_eq + total_ineq;
                 let primal_scale = (1.0_f64).max((total_constraints as f64).sqrt());
                 let dual_scale = (1.0_f64).max((n as f64).sqrt());
-                (primal_violation / primal_scale, dual_norm / dual_scale)
+                (
+                    violation_norm / primal_scale,
+                    dual_norm / dual_scale,
+                    complementarity,
+                )
             } else {
-                (primal_violation, dual_norm)
+                (violation_norm, dual_norm, complementarity)
             };
-            if primal_check < config.outer_tolerance && dual_check < config.dual_tolerance {
-                let mut multiplier_store = MultiplierStore::new();
-                let mut eq_idx = 0;
-                for c in constraints {
-                    for row in 0..c.equation_count() {
-                        multiplier_store.set(MultiplierId::new(c.id(), row), lambda[eq_idx]);
-                        eq_idx += 1;
-                    }
-                }
-                let mut ineq_idx = 0;
-                for h in inequalities {
-                    for row in 0..h.inequality_count() {
-                        multiplier_store.set(MultiplierId::new(h.id(), row), mu[ineq_idx]);
-                        ineq_idx += 1;
-                    }
-                }
-
+            if primal_check < config.outer_tolerance
+                && dual_check < config.dual_tolerance
+                && comp_check < config.dual_tolerance
+            {
                 return OptimizationResult {
                     objective_value: objective.value(store),
                     status: OptimizationStatus::Converged,
                     outer_iterations: outer_iter + 1,
                     inner_iterations: total_inner_iters,
                     kkt_residual: KktResidual {
-                        primal: primal_violation,
+                        primal: violation_norm,
                         dual: dual_norm,
                         complementarity,
                     },
-                    multipliers: multiplier_store,
-                    constraint_violations: violations,
+                    multipliers: build_multiplier_store(
+                        constraints,
+                        inequalities,
+                        &lambda_new,
+                        &mu_new,
+                    ),
+                    constraint_violations: collect_violations(constraints, inequalities, store),
                     duration: start.elapsed(),
                 };
             }
 
-            // Update equality multipliers: λ_{k+1} = λ_k + ρ * g(x_k)
-            let mut eq_idx = 0;
-            for c in constraints {
-                let resid = c.residuals(store);
-                for (row, r) in resid.iter().enumerate() {
-                    lambda[eq_idx] += rho * r;
-                    // Divergence guard: clamp prevents multiplier explosion when
-                    // the inner solve does not reduce constraint violation sufficiently.
-                    lambda[eq_idx] =
-                        lambda[eq_idx].clamp(-config.max_multiplier, config.max_multiplier);
-                    eq_idx += 1;
-                    let _ = row;
+            // Infeasibility / stall detection: penalty saturated (or the
+            // inner solver can no longer make progress) while the combined
+            // violation refuses to shrink toward tolerance.
+            if (rho >= config.rho_max || inner_line_search_failed)
+                && violation_norm > config.outer_tolerance
+            {
+                if violation_norm > 0.9 * prev_violation {
+                    stalled_outers += 1;
+                } else {
+                    stalled_outers = 0;
+                }
+                if stalled_outers >= 3 {
+                    // A saturated penalty with materially non-zero violation
+                    // is evidence of contradictory constraints; a stall at
+                    // small violation (or before ρ saturates) is a stall.
+                    let status = if rho >= config.rho_max
+                        && violation_norm > config.outer_tolerance.max(1e-4)
+                    {
+                        OptimizationStatus::Infeasible
+                    } else {
+                        OptimizationStatus::Stalled
+                    };
+                    return OptimizationResult {
+                        objective_value: objective.value(store),
+                        status,
+                        outer_iterations: outer_iter + 1,
+                        inner_iterations: total_inner_iters,
+                        kkt_residual: KktResidual {
+                            primal: violation_norm,
+                            dual: dual_norm,
+                            complementarity,
+                        },
+                        multipliers: build_multiplier_store(
+                            constraints,
+                            inequalities,
+                            &lambda_new,
+                            &mu_new,
+                        ),
+                        constraint_violations: collect_violations(
+                            constraints,
+                            inequalities,
+                            store,
+                        ),
+                        duration: start.elapsed(),
+                    };
                 }
             }
 
-            // Update inequality multipliers: μ_{k+1} = max(0, μ_k + ρ * h(x_k))
-            let mut ineq_idx = 0;
-            for h in inequalities {
-                let vals = h.values(store);
-                for v in &vals {
-                    mu[ineq_idx] = (mu[ineq_idx] + rho * v).max(0.0);
-                    // Divergence guard: clamp prevents multiplier explosion when
-                    // the inner solve does not reduce constraint violation sufficiently.
-                    mu[ineq_idx] = mu[ineq_idx].min(config.max_multiplier);
-                    ineq_idx += 1;
-                }
-            }
+            // Commit the multiplier updates.
+            lambda = lambda_new;
+            mu = mu_new;
 
-            // Increase penalty if violation didn't decrease enough
+            // Increase penalty if the combined violation didn't decrease
+            // enough. Using the combined measure means inequality-only
+            // problems also drive ρ growth.
             if violation_norm > 0.25 * prev_violation {
                 rho = (rho * config.rho_growth).min(config.rho_max);
             }
             prev_violation = violation_norm;
         }
 
-        // Max outer iterations
-        let mut multiplier_store = MultiplierStore::new();
-        let mut eq_idx = 0;
-        for c in constraints {
-            for row in 0..c.equation_count() {
-                multiplier_store.set(MultiplierId::new(c.id(), row), lambda[eq_idx]);
-                eq_idx += 1;
-            }
-        }
-        let mut ineq_idx = 0;
-        for h in inequalities {
-            for row in 0..h.inequality_count() {
-                multiplier_store.set(MultiplierId::new(h.id(), row), mu[ineq_idx]);
-                ineq_idx += 1;
-            }
-        }
-
-        let violations: Vec<f64> = constraints
-            .iter()
-            .flat_map(|c| c.residuals(store))
-            .collect();
-        let violation_norm: f64 = violations.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let ineq_violation: f64 = inequalities
-            .iter()
-            .flat_map(|h| h.values(store))
-            .map(|v| v.max(0.0))
-            .fold(0.0_f64, f64::max);
-        let primal_violation = violation_norm.max(ineq_violation);
-
+        // Max outer iterations.
+        let violation_norm = combined_violation(constraints, inequalities, store);
+        let dual_norm = lagrangian_stationarity(
+            objective,
+            constraints,
+            inequalities,
+            &lambda,
+            &mu,
+            &param_ids,
+            store,
+        );
         let complementarity = compute_complementarity(inequalities, &mu, store);
 
         OptimizationResult {
@@ -310,12 +449,12 @@ impl AlmSolver {
             outer_iterations: config.max_outer_iterations,
             inner_iterations: total_inner_iters,
             kkt_residual: KktResidual {
-                primal: primal_violation,
-                dual: f64::INFINITY,
+                primal: violation_norm,
+                dual: dual_norm,
                 complementarity,
             },
-            multipliers: multiplier_store,
-            constraint_violations: violations,
+            multipliers: build_multiplier_store(constraints, inequalities, &lambda, &mu),
+            constraint_violations: collect_violations(constraints, inequalities, store),
             duration: start.elapsed(),
         }
     }
