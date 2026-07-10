@@ -46,6 +46,7 @@ use crate::param::ParamStore;
 use crate::system::{
     ClusterResult, ClusterSolveStatus, DiagnosticIssue, SystemConfig, SystemResult, SystemStatus,
 };
+use crate::time::{SolveClock, StdClock};
 
 use self::analyze::DefaultAnalyze;
 use self::decompose::DefaultDecompose;
@@ -120,7 +121,29 @@ impl SolvePipeline {
         tracker: &mut ChangeTracker,
         cache: &mut SolutionCache,
     ) -> SystemResult {
-        let start = std::time::Instant::now();
+        self.run_with_clock(
+            constraints,
+            entities,
+            store,
+            config,
+            tracker,
+            cache,
+            &StdClock,
+        )
+    }
+
+    /// Run the full pipeline using a host-provided clock for duration reporting.
+    pub fn run_with_clock(
+        &mut self,
+        constraints: &[Option<Box<dyn Constraint>>],
+        entities: &[Option<Box<dyn Entity>>],
+        store: &mut ParamStore,
+        config: &SystemConfig,
+        tracker: &mut ChangeTracker,
+        cache: &mut SolutionCache,
+        clock: &impl SolveClock,
+    ) -> SystemResult {
+        let start = clock.mark();
 
         // -----------------------------------------------------------------
         // (a) Decompose if needed
@@ -263,7 +286,7 @@ impl SolvePipeline {
             status,
             clusters: cluster_results,
             total_iterations,
-            duration: start.elapsed(),
+            duration: clock.elapsed(&start),
         }
     }
 }

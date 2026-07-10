@@ -31,6 +31,7 @@ use crate::optimization::{
 };
 use crate::param::ParamStore;
 use crate::pipeline::SolvePipeline;
+use crate::time::{SolveClock, StdClock};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -43,6 +44,13 @@ pub struct SystemConfig {
     pub lm_config: crate::solver::LMConfig,
     /// Configuration for the Newton-Raphson solver (used by AutoSolver).
     pub solver_config: crate::solver::SolverConfig,
+    /// Maximum permitted final residual norm before a system can report solved.
+    ///
+    /// This is a final certification pass over every live constraint after the
+    /// pipeline writes its solution back into the parameter store. It prevents
+    /// cached, skipped, or incorrectly decomposed clusters from masking an
+    /// unsatisfied constraint.
+    pub final_residual_tolerance: f64,
 }
 
 impl Default for SystemConfig {
@@ -50,6 +58,7 @@ impl Default for SystemConfig {
         Self {
             lm_config: crate::solver::LMConfig::default(),
             solver_config: crate::solver::SolverConfig::default(),
+            final_residual_tolerance: 1e-8,
         }
     }
 }
@@ -66,7 +75,7 @@ pub struct SystemResult {
     pub clusters: Vec<ClusterResult>,
     /// Total solver iterations summed across all clusters.
     pub total_iterations: usize,
-    /// Wall-clock duration of the solve.
+    /// Duration reported by the solve clock.
     pub duration: std::time::Duration,
 }
 
@@ -118,6 +127,16 @@ pub enum DiagnosticIssue {
     UnderConstrained {
         entity: EntityId,
         free_directions: usize,
+    },
+    /// One or more constraints still have residuals above certification
+    /// tolerance after the pipeline wrote its final parameter values.
+    UnsatisfiedConstraints {
+        /// Constraints whose residuals exceeded the final tolerance.
+        constraints: Vec<ConstraintId>,
+        /// Largest absolute residual observed across all constraints.
+        max_residual: f64,
+        /// Certification tolerance used for the check.
+        tolerance: f64,
     },
 }
 
@@ -193,6 +212,16 @@ impl ConstraintSystem {
         let mut s = Self::new();
         s.config = config;
         s
+    }
+
+    /// Returns the constraint-system solve configuration.
+    pub fn config(&self) -> &SystemConfig {
+        &self.config
+    }
+
+    /// Returns mutable access to the constraint-system solve configuration.
+    pub fn config_mut(&mut self) -> &mut SystemConfig {
+        &mut self.config
     }
 
     // -------------------------------------------------------------------
@@ -403,16 +432,27 @@ impl ConstraintSystem {
     /// Delegates to the [`SolvePipeline`] which handles decomposition,
     /// analysis, reduction, per-cluster solving, and post-processing.
     pub fn solve(&mut self) -> SystemResult {
-        let start = std::time::Instant::now();
-        let mut result = self.pipeline.run(
+        self.solve_with_clock(&StdClock)
+    }
+
+    /// Solve the constraint system using a host-provided clock.
+    ///
+    /// Embedders that own determinism or platform policy should use this entry
+    /// point instead of [`solve`](Self::solve), then route elapsed-time capture
+    /// through their own platform abstraction.
+    pub fn solve_with_clock<C: SolveClock>(&mut self, clock: &C) -> SystemResult {
+        let start = clock.mark();
+        let mut result = self.pipeline.run_with_clock(
             &self.constraints,
             &self.entities,
             &mut self.params,
             &self.config,
             &mut self.change_tracker,
             &mut self.solution_cache,
+            clock,
         );
-        result.duration = start.elapsed();
+        result.duration = clock.elapsed(&start);
+        self.certify_final_residuals(&mut result);
         result
     }
 
@@ -421,6 +461,47 @@ impl ConstraintSystem {
     pub fn solve_incremental(&mut self) -> SystemResult {
         // Same as solve() -- the pipeline already handles incremental logic.
         self.solve()
+    }
+
+    /// Incremental solve using a host-provided clock.
+    pub fn solve_incremental_with_clock<C: SolveClock>(&mut self, clock: &C) -> SystemResult {
+        // Same as solve_with_clock() -- the pipeline already handles incremental logic.
+        self.solve_with_clock(clock)
+    }
+
+    fn certify_final_residuals(&self, result: &mut SystemResult) {
+        let mut max_residual = 0.0_f64;
+        let mut failing_constraints = Vec::new();
+
+        for constraint in self.constraints.iter().filter_map(|c| c.as_deref()) {
+            let local_max = constraint
+                .residuals(&self.params)
+                .into_iter()
+                .map(f64::abs)
+                .fold(0.0_f64, f64::max);
+            max_residual = max_residual.max(local_max);
+            if local_max > self.config.final_residual_tolerance {
+                failing_constraints.push(constraint.id());
+            }
+        }
+
+        if failing_constraints.is_empty() {
+            return;
+        }
+
+        let issue = DiagnosticIssue::UnsatisfiedConstraints {
+            constraints: failing_constraints,
+            max_residual,
+            tolerance: self.config.final_residual_tolerance,
+        };
+
+        result.status = match &mut result.status {
+            SystemStatus::DiagnosticFailure(issues) => {
+                issues.push(issue);
+                return;
+            }
+            _ => SystemStatus::DiagnosticFailure(vec![issue]),
+        };
     }
 
     /// Project a drag displacement onto the constraint manifold.
@@ -972,6 +1053,47 @@ mod tests {
     }
 
     #[test]
+    fn solve_with_zero_clock_reports_deterministic_duration() {
+        let mut system = ConstraintSystem::new();
+        let result = system.solve_with_clock(&crate::time::ZeroClock);
+
+        assert!(matches!(result.status, SystemStatus::Solved));
+        assert_eq!(result.duration, std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn final_residual_certification_rejects_unsatisfied_constraints() {
+        let mut system = ConstraintSystem::new();
+        system.config_mut().final_residual_tolerance = 1e-9;
+        let (eid, px, _py) = add_test_point(&mut system, 0.0, 0.0);
+
+        system.fix_param(px);
+        let cid = system.alloc_constraint_id();
+        system.add_constraint(Box::new(FixValueConstraint {
+            id: cid,
+            entity_ids: vec![eid],
+            param: px,
+            target: 7.0,
+        }));
+
+        let result = system.solve_with_clock(&crate::time::ZeroClock);
+
+        let SystemStatus::DiagnosticFailure(issues) = result.status else {
+            panic!("expected diagnostic failure, got {:?}", result.status);
+        };
+        assert!(issues.iter().any(|issue| matches!(
+            issue,
+            DiagnosticIssue::UnsatisfiedConstraints {
+                constraints,
+                max_residual,
+                tolerance,
+            } if constraints == &vec![cid]
+                && (*max_residual - 7.0).abs() < 1e-12
+                && (*tolerance - 1e-9).abs() < 1e-15
+        )));
+    }
+
+    #[test]
     fn test_solve_single_fix_constraint() {
         let mut system = ConstraintSystem::new();
         let (eid, px, _py) = add_test_point(&mut system, 0.0, 0.0);
@@ -1139,9 +1261,11 @@ mod tests {
         let config = SystemConfig {
             lm_config: LMConfig::robust(),
             solver_config: SolverConfig::fast(),
+            final_residual_tolerance: 1e-9,
         };
         let system = ConstraintSystem::with_config(config);
         assert_eq!(system.entity_count(), 0);
+        assert!((system.config().final_residual_tolerance - 1e-9).abs() < 1e-15);
     }
 
     #[test]

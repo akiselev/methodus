@@ -1,12 +1,23 @@
 # Solverang -- Repository Status
 
-*Last updated: 2026-03-26*
+*Last updated: 2026-05-03*
 
 ## Overview
 
 Solverang is a domain-agnostic numerical solver for nonlinear systems and least-squares problems. It has two personalities: a low-level `Problem` trait for raw equation systems, and a high-level V3 constraint system (`ConstraintSystem`, `Sketch2DBuilder`) where you describe entities and constraints and the solver figures out the rest.
 
 **Architecture**: V3 "solver-first" -- the solver core never imports a geometry type. Domain-specific modules (sketch2d, sketch3d, assembly) implement the `Entity` and `Constraint` extension traits.
+
+## Latest Work
+
+- Added host-provided solve timing for constraint systems: `SolveClock`,
+  `StdClock`, `ZeroClock`, `ConstraintSystem::solve_with_clock`, and
+  `SolvePipeline::run_with_clock`.
+- Added final residual certification for `ConstraintSystem` so nonzero
+  post-solve residuals produce `DiagnosticIssue::UnsatisfiedConstraints`
+  instead of reporting `SystemStatus::Solved`.
+- Added regression tests for deterministic zero-clock duration and impossible
+  fixed-parameter residual certification.
 
 ## Codebase
 
@@ -17,7 +28,8 @@ Solverang is a domain-agnostic numerical solver for nonlinear systems and least-
 | Integration tests (`crates/solverang/tests/`) | 17 | ~12,600 |
 | Benchmarks (`crates/solverang/benches/`) | 3 | ~1,300 |
 
-**All tests passing, zero compiler warnings.**
+Targeted constraint-system tests pass. The current crate still has existing
+compiler warnings in unrelated modules/tests.
 
 ## Module Map
 
@@ -106,7 +118,11 @@ Solverang is a domain-agnostic numerical solver for nonlinear systems and least-
 
 ## Known Issues
 
-1. **Decomposition cascading** -- when the solver decomposes into sub-clusters, solutions from earlier clusters don't always propagate to dependent clusters. Can cause `SystemStatus::Solved` to be returned despite non-zero residuals on cross-cluster constraints. Workaround: ensure free entities connect directly to fixed entities.
+1. **Decomposition cascading** -- when the solver decomposes into sub-clusters,
+   solutions from earlier clusters don't always propagate to dependent clusters.
+   Final residual certification now prevents `SystemStatus::Solved` from being
+   returned when post-solve residuals remain above tolerance, but the underlying
+   decomposition propagation still needs a deeper fix.
 
 ## Documentation
 

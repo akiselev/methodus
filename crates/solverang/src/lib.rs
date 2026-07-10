@@ -370,6 +370,7 @@ pub mod sketch2d;
 pub mod sketch3d;
 pub mod solve;
 pub mod system;
+pub mod time;
 
 // --- Existing modules (kept as-is) ---
 pub mod constraints;
@@ -430,6 +431,7 @@ pub mod __jit_reexports {
 pub use id::{ClusterId, ConstraintId, EntityId, ParamId};
 pub use param::ParamStore;
 pub use system::ConstraintSystem;
+pub use time::{SolveClock, StdClock, ZeroClock};
 
 // --- Re-export optimization types ---
 pub use optimization::{
