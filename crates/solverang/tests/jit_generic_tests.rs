@@ -679,11 +679,11 @@ mod layer3_expr_parsing {
 mod layer4_jit_roundtrip {
     use super::*;
 
-    /// Helper trait that Problems annotated with #[jit_problem] will implement.
-    /// This generates the opcode-lowering code alongside the Jacobian.
-    ///
-    /// For now we test by manually lowering, since the macro extension doesn't
-    /// exist yet. These tests will be updated to use the macro once it's built.
+    // Helper trait that Problems annotated with #[jit_problem] will implement.
+    // This generates the opcode-lowering code alongside the Jacobian.
+    //
+    // For now we test by manually lowering, since the macro extension doesn't
+    // exist yet. These tests will be updated to use the macro once it's built.
 
     /// Quadratic: x^2 - target = 0
     /// Tests: LoadVar, Mul, LoadConst (RuntimeConst), Sub, StoreResidual
@@ -1872,7 +1872,8 @@ mod layer8_auto_detection {
         );
     }
 
-    /// force_interpreted = true skips JIT even for capable problems.
+    /// JitMode::ForceInterpreted skips JIT even for capable problems, and the
+    /// fallback reason is reported.
     #[test]
     fn force_interpreted_skips_jit() {
         let problem = JITCapableQuadratic { target: 4.0 };
@@ -1884,6 +1885,10 @@ mod layer8_auto_detection {
             "forced interpreted should converge: {:?}",
             result
         );
+        assert!(matches!(
+            solver.last_jit_fallback(),
+            Some(solverang::solver::JitFallback::ForcedInterpreted)
+        ));
     }
 
     /// Multi-residual JIT auto-detection: Rosenbrock with 2 residuals.
@@ -1958,7 +1963,7 @@ mod layer8_auto_detection {
 // ============================================================================
 
 mod layer9_fused_evaluation {
-    use solverang::jit::{CompiledConstraints, ConstraintOp, JITCompiler};
+    use solverang::jit::{ConstraintOp, JITCompiler};
     use solverang::{auto_jacobian, Problem};
 
     /// Distance constraint for fused evaluation tests.
@@ -2355,7 +2360,7 @@ mod layer10_dense_jacobian {
     /// Dense Rosenbrock solved via JITSolver with dense path.
     #[test]
     fn dense_solver_rosenbrock_converges() {
-        use solverang::jit::{CompiledConstraints as _CC, JITConfig};
+        use solverang::jit::JITConfig;
         use solverang::solver::JITSolver;
 
         let problem = DenseRosenbrock;
@@ -2414,7 +2419,7 @@ mod layer10_dense_jacobian {
 // ============================================================================
 
 mod layer11_compiled_newton {
-    use solverang::jit::{CompiledConstraints, JITCompiler};
+    use solverang::jit::JITCompiler;
     use solverang::{auto_jacobian, Problem};
 
     /// Simple quadratic for Newton step tests: x^2 - 4 = 0, solution x=2.
@@ -2497,7 +2502,7 @@ mod layer11_compiled_newton {
 
         let x = &[3.0_f64];
         let mut x_new = vec![0.0; 1];
-        let mut scratch = vec![0.0; 1 + 1 * 1 + 1]; // m + m*n + n
+        let mut scratch = vec![0.0; 1 + 1 + 1]; // m + m*n + n
 
         let norm = step_fn.evaluate(x, &mut x_new, &mut scratch);
 

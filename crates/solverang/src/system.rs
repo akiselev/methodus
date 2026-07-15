@@ -12,13 +12,21 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use solverang::system::{ConstraintSystem, SystemConfig};
+//! ```
+//! use solverang::ConstraintSystem;
+//! use solverang::system::SystemStatus;
 //!
 //! let mut system = ConstraintSystem::new();
-//! let px = system.alloc_param(0.0, entity_id);
-//! // ... add entities, constraints ...
+//!
+//! // Allocate an entity ID first, then its parameters. A geometry layer
+//! // (e.g. `sketch2d::Sketch2DBuilder`) normally does this for you and
+//! // also adds the entity and constraints.
+//! let entity = system.alloc_entity_id();
+//! let px = system.alloc_param(3.0, entity);
+//!
 //! let result = system.solve();
+//! assert!(matches!(result.status, SystemStatus::Solved));
+//! assert_eq!(system.get_param(px), 3.0);
 //! ```
 
 use crate::constraint::Constraint;
@@ -74,7 +82,7 @@ pub struct SystemResult {
     /// Per-cluster results (one entry per independent cluster).
     pub clusters: Vec<ClusterResult>,
     /// Total solver iterations summed across all clusters.
-    pub total_iterations: usize,
+    pub iterations: usize,
     /// Duration reported by the solve clock.
     pub duration: std::time::Duration,
 }
@@ -113,19 +121,65 @@ pub enum ClusterSolveStatus {
     Skipped,
 }
 
+/// Why an entity or constraint removal was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemovalError {
+    /// The ID is unknown to this system or its generation is stale
+    /// (the slot was reused after an earlier removal).
+    StaleId,
+    /// Live constraints still reference the entity; remove them first.
+    HasDependentConstraints {
+        /// The constraints that reference the entity.
+        constraints: Vec<ConstraintId>,
+    },
+    /// Another live entity shares one of the entity's parameters (e.g. a
+    /// line segment sharing a point's coordinates); remove it first.
+    SharedParams {
+        /// The entities sharing parameters.
+        entities: Vec<EntityId>,
+    },
+}
+
+impl std::fmt::Display for RemovalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StaleId => write!(f, "stale or unknown ID"),
+            Self::HasDependentConstraints { constraints } => write!(
+                f,
+                "{} constraint(s) still reference the entity",
+                constraints.len()
+            ),
+            Self::SharedParams { entities } => write!(
+                f,
+                "{} other entity(ies) share the entity's parameters",
+                entities.len()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RemovalError {}
+
 /// A diagnostic issue detected in the constraint system.
 #[derive(Debug, Clone)]
 pub enum DiagnosticIssue {
     /// A constraint is redundant (implied by others).
     RedundantConstraint {
+        /// The redundant constraint.
         constraint: ConstraintId,
+        /// Constraints that already imply it (empty when unknown).
         implied_by: Vec<ConstraintId>,
     },
     /// Two or more constraints conflict (cannot be simultaneously satisfied).
-    ConflictingConstraints { constraints: Vec<ConstraintId> },
+    ConflictingConstraints {
+        /// The mutually conflicting constraints.
+        constraints: Vec<ConstraintId>,
+    },
     /// An entity has unconstrained directions.
     UnderConstrained {
+        /// The under-constrained entity.
         entity: EntityId,
+        /// Number of unconstrained directions (degrees of freedom).
         free_directions: usize,
     },
     /// One or more constraints still have residuals above certification
@@ -313,14 +367,25 @@ impl ConstraintSystem {
     /// [`alloc_param`](Self::alloc_param)).
     ///
     /// Returns the entity's ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity's ID was not allocated by this system's
+    /// [`alloc_entity_id`](Self::alloc_entity_id) (unknown slot, stale
+    /// generation, or a slot that is already occupied) — that is a
+    /// programming error, not a recoverable condition.
     pub fn add_entity(&mut self, entity: Box<dyn Entity>) -> EntityId {
         let id = entity.id();
         let idx = id.raw_index() as usize;
 
-        // Grow the entity vector if needed
-        if idx >= self.entities.len() {
-            self.entities.resize_with(idx + 1, || None);
-        }
+        assert!(
+            idx < self.entities.len() && self.entity_generations[idx] == id.generation,
+            "add_entity: {id:?} was not allocated by this system's alloc_entity_id"
+        );
+        assert!(
+            self.entities[idx].is_none(),
+            "add_entity: slot for {id:?} is already occupied"
+        );
         self.entities[idx] = Some(entity);
         self.change_tracker.mark_entity_added(id);
         id
@@ -348,23 +413,61 @@ impl ConstraintSystem {
 
     /// Remove an entity and free its parameters.
     ///
-    /// Any constraints referencing this entity will not be automatically
-    /// removed; remove them separately if needed.
-    pub fn remove_entity(&mut self, id: EntityId) {
+    /// Removal is refused (with a descriptive error) instead of corrupting
+    /// the system when:
+    ///
+    /// - the ID is stale or unknown ([`RemovalError::StaleId`]),
+    /// - live constraints still reference the entity
+    ///   ([`RemovalError::HasDependentConstraints`]) — remove them first,
+    /// - another live entity shares one of its parameters
+    ///   ([`RemovalError::SharedParams`]) — e.g. a line segment sharing an
+    ///   endpoint's coordinates. Remove the sharing entity first.
+    pub fn remove_entity(&mut self, id: EntityId) -> Result<(), RemovalError> {
         let idx = id.raw_index() as usize;
-        if idx < self.entities.len()
+        let live = idx < self.entities.len()
             && idx < self.entity_generations.len()
             && self.entity_generations[idx] == id.generation
-        {
-            if let Some(entity) = self.entities[idx].take() {
-                for &pid in entity.params() {
-                    self.params.free(pid);
-                }
-                self.entity_free_list.push(idx as u32);
-                self.change_tracker.mark_entity_removed(id);
-                self.pipeline.invalidate();
-            }
+            && self.entities[idx].is_some();
+        if !live {
+            return Err(RemovalError::StaleId);
         }
+
+        // Refuse while constraints still reference the entity.
+        let dependents: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter_map(|c| c.as_deref())
+            .filter(|c| c.entity_ids().contains(&id))
+            .map(|c| c.id())
+            .collect();
+        if !dependents.is_empty() {
+            return Err(RemovalError::HasDependentConstraints {
+                constraints: dependents,
+            });
+        }
+
+        // Refuse while another live entity shares one of its parameters
+        // (freeing them would leave that entity with dangling ParamIds).
+        let params = self.entities[idx].as_ref().expect("checked live").params();
+        let sharing: Vec<EntityId> = self
+            .entities
+            .iter()
+            .filter_map(|e| e.as_deref())
+            .filter(|e| e.id() != id && e.params().iter().any(|p| params.contains(p)))
+            .map(|e| e.id())
+            .collect();
+        if !sharing.is_empty() {
+            return Err(RemovalError::SharedParams { entities: sharing });
+        }
+
+        let entity = self.entities[idx].take().expect("checked live");
+        for &pid in entity.params() {
+            self.params.free(pid);
+        }
+        self.entity_free_list.push(idx as u32);
+        self.change_tracker.mark_entity_removed(id);
+        self.pipeline.invalidate();
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -392,13 +495,25 @@ impl ConstraintSystem {
     /// [`alloc_constraint_id`](Self::alloc_constraint_id)).
     ///
     /// Returns the constraint's ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the constraint's ID was not allocated by this system's
+    /// [`alloc_constraint_id`](Self::alloc_constraint_id) (unknown slot,
+    /// stale generation, or an occupied slot) — that is a programming error,
+    /// not a recoverable condition.
     pub fn add_constraint(&mut self, constraint: Box<dyn Constraint>) -> ConstraintId {
         let id = constraint.id();
         let idx = id.raw_index() as usize;
 
-        if idx >= self.constraints.len() {
-            self.constraints.resize_with(idx + 1, || None);
-        }
+        assert!(
+            idx < self.constraints.len() && self.constraint_generations[idx] == id.generation,
+            "add_constraint: {id:?} was not allocated by this system's alloc_constraint_id"
+        );
+        assert!(
+            self.constraints[idx].is_none(),
+            "add_constraint: slot for {id:?} is already occupied"
+        );
         self.constraints[idx] = Some(constraint);
         self.change_tracker.mark_constraint_added(id);
         self.pipeline.invalidate();
@@ -406,17 +521,60 @@ impl ConstraintSystem {
     }
 
     /// Remove a constraint from the system.
-    pub fn remove_constraint(&mut self, id: ConstraintId) {
+    ///
+    /// Returns [`RemovalError::StaleId`] when the ID is stale or unknown
+    /// instead of silently doing nothing.
+    pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), RemovalError> {
         let idx = id.raw_index() as usize;
         if idx < self.constraints.len()
             && idx < self.constraint_generations.len()
             && self.constraint_generations[idx] == id.generation
+            && self.constraints[idx].is_some()
         {
-            if self.constraints[idx].is_some() {
-                self.constraints[idx] = None;
-                self.constraint_free_list.push(idx as u32);
-                self.change_tracker.mark_constraint_removed(id);
-                self.pipeline.invalidate();
+            self.constraints[idx] = None;
+            self.constraint_free_list.push(idx as u32);
+            self.change_tracker.mark_constraint_removed(id);
+            self.pipeline.invalidate();
+            Ok(())
+        } else {
+            Err(RemovalError::StaleId)
+        }
+    }
+
+    /// Debug-mode referential integrity sweep, run before every solve.
+    ///
+    /// Panics when a live constraint references a dead parameter or a dead
+    /// entity, or a live entity owns a dead parameter — all states that the
+    /// removal guards should make unreachable.
+    #[cfg(debug_assertions)]
+    fn debug_validate_integrity(&self) {
+        for entity in self.entities.iter().filter_map(|e| e.as_deref()) {
+            for &pid in entity.params() {
+                debug_assert!(
+                    self.params.is_alive(pid),
+                    "integrity: entity {:?} owns dead param {pid:?}",
+                    entity.id()
+                );
+            }
+        }
+        for constraint in self.constraints.iter().filter_map(|c| c.as_deref()) {
+            for &pid in constraint.param_ids() {
+                debug_assert!(
+                    self.params.is_alive(pid),
+                    "integrity: constraint {:?} references dead param {pid:?}",
+                    constraint.id()
+                );
+            }
+            for &eid in constraint.entity_ids() {
+                let idx = eid.raw_index() as usize;
+                let live = idx < self.entities.len()
+                    && self.entity_generations[idx] == eid.generation
+                    && self.entities[idx].is_some();
+                debug_assert!(
+                    live,
+                    "integrity: constraint {:?} references dead entity {eid:?}",
+                    constraint.id()
+                );
             }
         }
     }
@@ -473,6 +631,8 @@ impl ConstraintSystem {
     /// point instead of [`solve`](Self::solve), then route elapsed-time capture
     /// through their own platform abstraction.
     pub fn solve_with_clock<C: SolveClock>(&mut self, clock: &C) -> SystemResult {
+        #[cfg(debug_assertions)]
+        self.debug_validate_integrity();
         let start = clock.mark();
         let mut result = self.pipeline.run_with_clock(
             &self.constraints,
@@ -750,10 +910,12 @@ impl ConstraintSystem {
         Some(hasher.finish())
     }
 
-    fn unsupported_structure(reason: &'static str) -> OptimizationResult {
+    fn unsupported_structure(reason: impl Into<String>) -> OptimizationResult {
         OptimizationResult {
             objective_value: f64::NAN,
-            status: OptimizationStatus::UnsupportedProblemStructure { reason },
+            status: OptimizationStatus::UnsupportedProblemStructure {
+                reason: reason.into(),
+            },
             outer_iterations: 0,
             inner_iterations: 0,
             kkt_residual: crate::optimization::KktResidual {
@@ -786,26 +948,27 @@ impl ConstraintSystem {
     /// modifying any parameters, instead of silently solving a different
     /// problem.
     pub fn optimize(&mut self) -> OptimizationResult {
+        self.optimize_with_clock(&StdClock)
+    }
+
+    /// Like [`optimize`](Self::optimize), but with a host-provided clock for
+    /// duration reporting (mirrors [`solve_with_clock`](Self::solve_with_clock)).
+    pub fn optimize_with_clock<C: SolveClock>(&mut self, clock: &C) -> OptimizationResult {
         let model = match &self.objective {
             Some(model) => model,
             None => {
-                return OptimizationResult {
-                    objective_value: f64::NAN,
-                    status: OptimizationStatus::Infeasible,
-                    outer_iterations: 0,
-                    inner_iterations: 0,
-                    kkt_residual: crate::optimization::KktResidual {
-                        primal: f64::INFINITY,
-                        dual: f64::INFINITY,
-                        complementarity: f64::INFINITY,
-                    },
-                    multipliers: MultiplierStore::new(),
-                    constraint_violations: Vec::new(),
-                    duration: std::time::Duration::ZERO,
-                };
+                // Nothing is infeasible here — the problem is malformed.
+                return Self::unsupported_structure(
+                    "no objective set; call set_objective or set_objective_with_hessian first",
+                );
             }
         };
         let objective = model.objective();
+
+        // Reject nonsensical configurations before touching any parameters.
+        if let Err(reason) = self.opt_config.validate() {
+            return Self::unsupported_structure(format!("invalid optimization config: {reason}"));
+        }
 
         // Classify: check if we have equality constraints
         let eq_constraints: Vec<&dyn Constraint> = self
@@ -891,41 +1054,34 @@ impl ConstraintSystem {
         };
 
         let result = match algorithm {
-            OptimizationAlgorithm::Bfgs => {
-                crate::solver::BfgsSolver::solve(objective, &mut self.params, &self.opt_config)
-            }
-            OptimizationAlgorithm::BfgsB => {
-                crate::solver::BfgsBSolver::solve(objective, &mut self.params, &self.opt_config)
-            }
+            OptimizationAlgorithm::Bfgs => crate::solver::BfgsSolver::new(self.opt_config.clone())
+                .solve_with_clock(objective, &mut self.params, clock),
+            OptimizationAlgorithm::BfgsB => crate::solver::BfgsBSolver::new(
+                self.opt_config.clone(),
+            )
+            .solve_with_clock(objective, &mut self.params, clock),
             OptimizationAlgorithm::Alm => {
-                let warm = match self.opt_config.multiplier_init {
+                let warm = match self.opt_config.alm.multiplier_init {
                     crate::optimization::MultiplierInitStrategy::WarmStart => {
                         Some(&self.last_multipliers)
                     }
                     _ => None,
                 };
-                crate::solver::AlmSolver::solve(
+                crate::solver::AlmSolver::new(self.opt_config.clone()).solve_with_clock(
                     objective,
                     &eq_constraints,
                     &ineq_constraints,
                     &mut self.params,
-                    &self.opt_config,
                     warm,
+                    clock,
                 )
             }
             OptimizationAlgorithm::TrustRegion => {
+                let solver = crate::solver::TrustRegionSolver::new(self.opt_config.clone());
                 if let Some(hess_obj) = model.hessian() {
-                    crate::solver::TrustRegionSolver::solve_with_hessian(
-                        hess_obj,
-                        &mut self.params,
-                        &self.opt_config,
-                    )
+                    solver.solve_with_hessian_and_clock(hess_obj, &mut self.params, clock)
                 } else {
-                    crate::solver::TrustRegionSolver::solve(
-                        objective,
-                        &mut self.params,
-                        &self.opt_config,
-                    )
+                    solver.solve_with_clock(objective, &mut self.params, clock)
                 }
             }
             OptimizationAlgorithm::Auto => {
@@ -1145,7 +1301,7 @@ mod tests {
         assert_eq!(system.entity_count(), 1);
         assert_eq!(system.params().alive_count(), 2);
 
-        system.remove_entity(eid);
+        system.remove_entity(eid).unwrap();
         assert_eq!(system.entity_count(), 0);
         // Params should be freed
         assert_eq!(system.params().alive_count(), 0);
@@ -1188,7 +1344,7 @@ mod tests {
         system.add_constraint(Box::new(constraint));
         assert_eq!(system.constraint_count(), 1);
 
-        system.remove_constraint(cid);
+        system.remove_constraint(cid).unwrap();
         assert_eq!(system.constraint_count(), 0);
         assert_eq!(system.degrees_of_freedom(), 2);
     }
@@ -1208,13 +1364,52 @@ mod tests {
     }
 
     #[test]
+    fn remove_entity_stale_id_errors() {
+        let mut system = ConstraintSystem::new();
+        let eid = system.alloc_entity_id();
+        // Never added: removal must report a stale/unknown ID.
+        assert_eq!(system.remove_entity(eid), Err(RemovalError::StaleId));
+    }
+
+    #[test]
+    fn remove_entity_with_dependent_constraint_is_refused() {
+        let mut system = ConstraintSystem::new();
+        let (eid, px, _py) = add_test_point(&mut system, 1.0, 2.0);
+        let cid = system.alloc_constraint_id();
+        system.add_constraint(Box::new(FixValueConstraint {
+            id: cid,
+            entity_ids: vec![eid],
+            param: px,
+            target: 1.0,
+        }));
+
+        match system.remove_entity(eid) {
+            Err(RemovalError::HasDependentConstraints { constraints }) => {
+                assert_eq!(constraints, vec![cid]);
+            }
+            other => panic!("expected HasDependentConstraints, got {other:?}"),
+        }
+
+        // After removing the constraint, entity removal succeeds.
+        system.remove_constraint(cid).unwrap();
+        system.remove_entity(eid).unwrap();
+    }
+
+    #[test]
+    fn remove_constraint_stale_id_errors() {
+        let mut system = ConstraintSystem::new();
+        let cid = system.alloc_constraint_id();
+        assert_eq!(system.remove_constraint(cid), Err(RemovalError::StaleId));
+    }
+
+    #[test]
     fn test_solve_empty_system() {
         let mut system = ConstraintSystem::new();
         let result = system.solve();
 
         assert!(matches!(result.status, SystemStatus::Solved));
         assert_eq!(result.clusters.len(), 0);
-        assert_eq!(result.total_iterations, 0);
+        assert_eq!(result.iterations, 0);
     }
 
     #[test]
@@ -1472,7 +1667,7 @@ mod tests {
         assert!(!system.change_tracker().has_any_changes());
 
         // Removing the constraint is also a structural change
-        system.remove_constraint(cid);
+        system.remove_constraint(cid).unwrap();
         assert!(system.change_tracker().has_structural_changes());
     }
 
@@ -1583,7 +1778,10 @@ mod tests {
         system.clear_objective();
         assert!(!system.has_objective());
         let result = system.optimize();
-        assert_eq!(result.status, OptimizationStatus::Infeasible);
+        assert!(matches!(
+            result.status,
+            OptimizationStatus::UnsupportedProblemStructure { .. }
+        ));
     }
 
     #[test]
@@ -1594,8 +1792,10 @@ mod tests {
             param: p,
             target: 9.0,
         }));
-        let mut config = crate::optimization::OptimizationConfig::default();
-        config.algorithm = OptimizationAlgorithm::TrustRegion;
+        let config = crate::optimization::OptimizationConfig {
+            algorithm: OptimizationAlgorithm::TrustRegion,
+            ..Default::default()
+        };
         system.set_opt_config(config);
         let result = system.optimize();
         assert_eq!(result.status, OptimizationStatus::Converged);
@@ -1620,8 +1820,10 @@ mod tests {
         }));
 
         let before = system.get_param(p);
-        let mut config = crate::optimization::OptimizationConfig::default();
-        config.algorithm = OptimizationAlgorithm::Bfgs;
+        let config = crate::optimization::OptimizationConfig {
+            algorithm: OptimizationAlgorithm::Bfgs,
+            ..Default::default()
+        };
         system.set_opt_config(config);
         let result = system.optimize();
         assert!(
@@ -1653,8 +1855,10 @@ mod tests {
             target: 1.0,
         }));
 
-        let mut config = crate::optimization::OptimizationConfig::default();
-        config.algorithm = OptimizationAlgorithm::TrustRegion;
+        let config = crate::optimization::OptimizationConfig {
+            algorithm: OptimizationAlgorithm::TrustRegion,
+            ..Default::default()
+        };
         system.set_opt_config(config);
         let result = system.optimize();
         assert!(matches!(
@@ -1673,8 +1877,10 @@ mod tests {
         }));
         system.params_mut().set_bounds(p, 0.0, 1.0);
 
-        let mut config = crate::optimization::OptimizationConfig::default();
-        config.algorithm = OptimizationAlgorithm::Bfgs;
+        let config = crate::optimization::OptimizationConfig {
+            algorithm: OptimizationAlgorithm::Bfgs,
+            ..Default::default()
+        };
         system.set_opt_config(config);
         let result = system.optimize();
         assert!(matches!(
@@ -1702,8 +1908,13 @@ mod tests {
             param: p,
             target: 1.0,
         }));
-        let mut config = crate::optimization::OptimizationConfig::default();
-        config.multiplier_init = crate::optimization::MultiplierInitStrategy::WarmStart;
+        let config = crate::optimization::OptimizationConfig {
+            alm: crate::optimization::AlmConfig {
+                multiplier_init: crate::optimization::MultiplierInitStrategy::WarmStart,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         system.set_opt_config(config);
 
         let r1 = system.optimize();

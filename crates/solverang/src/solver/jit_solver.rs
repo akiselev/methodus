@@ -3,10 +3,25 @@
 //! This module provides a solver that can use JIT-compiled constraint evaluation
 //! for improved performance on large constraint systems.
 
-use crate::jit::{CompiledConstraints, JITCompiler, JITConfig, JITError, JITFunction};
+use crate::jit::{CompiledConstraints, JITCompiler, JITConfig, JITError, JITFunction, JitMode};
 use crate::problem::Problem;
 use crate::solver::result::{SolveError, SolveResult};
 use nalgebra::{DMatrix, DVector};
+
+/// Why a [`JITSolver::solve`] call used interpreted evaluation instead of JIT.
+#[derive(Clone, Debug)]
+pub enum JitFallback {
+    /// The configuration forces interpreted evaluation ([`JitMode::ForceInterpreted`]).
+    ForcedInterpreted,
+    /// The problem does not implement `lower_to_compiled_constraints()`.
+    NoCompiledConstraints,
+    /// JIT is not supported on this platform.
+    PlatformUnavailable,
+    /// The estimated work was below `jit_threshold`.
+    BelowThreshold,
+    /// Compilation was attempted but failed.
+    CompilationFailed(JITError),
+}
 
 /// A solver that uses JIT compilation for large constraint systems.
 ///
@@ -29,6 +44,10 @@ pub struct JITSolver {
 
     /// Cached JIT compiler.
     compiler: Option<JITCompiler>,
+
+    /// Why the most recent `solve()` fell back to interpreted evaluation
+    /// (`None` when it used JIT).
+    last_fallback: Option<JitFallback>,
 }
 
 impl JITSolver {
@@ -37,6 +56,7 @@ impl JITSolver {
         Self {
             config,
             compiler: None,
+            last_fallback: None,
         }
     }
 
@@ -50,18 +70,26 @@ impl JITSolver {
         &self.config
     }
 
+    /// Why the most recent [`solve`](Self::solve) used interpreted evaluation.
+    ///
+    /// Returns `None` if the last solve ran JIT-compiled, or if no solve has
+    /// happened yet. Use this to distinguish an intentional fallback (below
+    /// threshold, forced interpreted) from an unexpected one (compilation
+    /// failure, unsupported platform).
+    pub fn last_jit_fallback(&self) -> Option<&JitFallback> {
+        self.last_fallback.as_ref()
+    }
+
     /// Check if JIT will be used for the given problem.
     pub fn will_use_jit<P: Problem>(&self, problem: &P) -> bool {
-        if self.config.force_interpreted {
-            return false;
+        match self.config.mode {
+            JitMode::ForceInterpreted => false,
+            JitMode::ForceJit => crate::jit::jit_available(),
+            JitMode::Auto => {
+                let estimated_work = problem.residual_count() * self.config.estimated_iterations;
+                estimated_work > self.config.jit_threshold && crate::jit::jit_available()
+            }
         }
-
-        if self.config.force_jit {
-            return crate::jit::jit_available();
-        }
-
-        let estimated_work = problem.residual_count() * self.config.estimated_iterations;
-        estimated_work > self.config.jit_threshold && crate::jit::jit_available()
     }
 
     /// Check if JIT should be used for the given compiled constraints.
@@ -69,56 +97,44 @@ impl JITSolver {
     /// Uses `total_ops()` from the compiled constraints for a more accurate
     /// estimate of computation cost than `will_use_jit()`.
     pub fn should_jit(&self, cc: &CompiledConstraints) -> bool {
-        if self.config.force_interpreted {
-            return false;
+        match self.config.mode {
+            JitMode::ForceInterpreted => false,
+            JitMode::ForceJit => crate::jit::jit_available(),
+            JitMode::Auto => {
+                let estimated_work = cc.total_ops() * self.config.estimated_iterations;
+                estimated_work > self.config.jit_threshold && crate::jit::jit_available()
+            }
         }
-
-        if self.config.force_jit {
-            return crate::jit::jit_available();
-        }
-
-        let estimated_work = cc.total_ops() * self.config.estimated_iterations;
-        estimated_work > self.config.jit_threshold && crate::jit::jit_available()
     }
 
     /// Solve a problem using either JIT or interpreted evaluation.
     pub fn solve<P: Problem>(&mut self, problem: &P, x0: &[f64]) -> SolveResult {
-        let n = problem.variable_count();
-        let m = problem.residual_count();
-
-        // Validate problem dimensions
-        if n == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoVariables,
-            };
+        if let Err(error) = super::common::validate_problem(problem, x0) {
+            return error.into();
         }
 
-        if m == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoEquations,
-            };
-        }
-
-        if x0.len() != n {
-            return SolveResult::Failed {
-                error: SolveError::DimensionMismatch {
-                    expected: n,
-                    got: x0.len(),
-                },
-            };
-        }
-
-        // Try JIT path if the problem can produce CompiledConstraints
-        if !self.config.force_interpreted {
-            if let Some(compiled) = problem.lower_to_compiled_constraints() {
-                if self.should_jit(&compiled) {
-                    match self.compile(&compiled) {
-                        Ok(jit_fn) => return self.solve_with_jit(&jit_fn, x0),
-                        Err(_) => { /* fall through to interpreted */ }
+        // Try JIT path if the problem can produce CompiledConstraints. Record
+        // why we fall back so callers can distinguish an intentional
+        // interpreted solve from an unexpected one (see `last_jit_fallback`).
+        self.last_fallback = if self.config.mode == JitMode::ForceInterpreted {
+            Some(JitFallback::ForcedInterpreted)
+        } else if let Some(compiled) = problem.lower_to_compiled_constraints() {
+            if !crate::jit::jit_available() {
+                Some(JitFallback::PlatformUnavailable)
+            } else if !self.should_jit(&compiled) {
+                Some(JitFallback::BelowThreshold)
+            } else {
+                match self.compile(&compiled) {
+                    Ok(jit_fn) => {
+                        self.last_fallback = None;
+                        return self.solve_with_jit(&jit_fn, x0);
                     }
+                    Err(e) => Some(JitFallback::CompilationFailed(e)),
                 }
             }
-        }
+        } else {
+            Some(JitFallback::NoCompiledConstraints)
+        };
 
         self.solve_interpreted(problem, x0)
     }
@@ -148,11 +164,8 @@ impl JITSolver {
             // JIT writes directly into DMatrix column-major storage — no COO copy.
             jit_fn.evaluate_both_dense(x.as_slice(), &mut residuals, j.as_mut_slice());
 
-            // Check for non-finite residuals
-            if residuals.iter().any(|r| !r.is_finite()) {
-                return SolveResult::Failed {
-                    error: SolveError::NonFiniteResiduals,
-                };
+            if let Err(error) = super::common::check_residuals_finite(&residuals) {
+                return error.into();
             }
 
             let r = DVector::from_column_slice(&residuals);
@@ -210,11 +223,8 @@ impl JITSolver {
             // Compute residuals
             let residuals = problem.residuals(x.as_slice());
 
-            // Check for non-finite residuals
-            if residuals.iter().any(|r| !r.is_finite()) {
-                return SolveResult::Failed {
-                    error: SolveError::NonFiniteResiduals,
-                };
+            if let Err(error) = super::common::check_residuals_finite(&residuals) {
+                return error.into();
             }
 
             let r = DVector::from_column_slice(&residuals);
@@ -232,11 +242,8 @@ impl JITSolver {
             // Compute Jacobian
             let jac_entries = problem.jacobian(x.as_slice());
 
-            // Check for non-finite Jacobian entries
-            if jac_entries.iter().any(|(_, _, v)| !v.is_finite()) {
-                return SolveResult::Failed {
-                    error: SolveError::NonFiniteJacobian,
-                };
+            if let Err(error) = super::common::check_jacobian_finite(&jac_entries) {
+                return error.into();
             }
 
             let mut j = DMatrix::zeros(m, n);
@@ -396,8 +403,7 @@ mod tests {
         let config = JITConfig::default();
         assert_eq!(config.jit_threshold, 1000);
         assert_eq!(config.max_iterations, 200);
-        assert!(!config.force_jit);
-        assert!(!config.force_interpreted);
+        assert_eq!(config.mode, JitMode::Auto);
     }
 
     #[test]

@@ -74,36 +74,8 @@ impl LMSolver {
     ///
     /// A `SolveResult` indicating success or failure of the optimization.
     pub fn solve<P: Problem + ?Sized>(&self, problem: &P, x0: &[f64]) -> SolveResult {
-        let n = problem.variable_count();
-        let m = problem.residual_count();
-
-        // Validate problem dimensions
-        if n == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoVariables,
-            };
-        }
-
-        if m == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoEquations,
-            };
-        }
-
-        if x0.len() != n {
-            return SolveResult::Failed {
-                error: SolveError::DimensionMismatch {
-                    expected: n,
-                    got: x0.len(),
-                },
-            };
-        }
-
-        // Check initial point for non-finite values
-        if x0.iter().any(|v| !v.is_finite()) {
-            return SolveResult::Failed {
-                error: SolveError::NonFiniteResiduals,
-            };
+        if let Err(error) = super::common::validate_problem(problem, x0) {
+            return error.into();
         }
 
         // Create the adapter for levenberg-marquardt crate
@@ -138,7 +110,9 @@ impl LMSolver {
         )
     }
 
-    /// Solve using the problem's default initial point.
+    /// Solve from the problem's own starting point: `factor` scales
+    /// [`Problem::initial_point`] (MINPACK convention: 1, 10, 100 test
+    /// robustness to increasingly distant starts).
     pub fn solve_from_initial<P: Problem + ?Sized>(&self, problem: &P, factor: f64) -> SolveResult {
         let x0 = problem.initial_point(factor);
         self.solve(problem, &x0)

@@ -5,7 +5,7 @@
 
 #![cfg(feature = "macros")]
 
-use solverang::{auto_diff, objective};
+use solverang::auto_diff;
 
 const FD_H: f64 = 1e-6;
 const FD_TOL: f64 = 1e-5;
@@ -48,7 +48,7 @@ fn test_sinh_gradient_matches_fd() {
         let (idx, grad) = entries[0];
         assert_eq!(idx, 0);
 
-        let fd = fd_gradient(|x| x[0].sinh(), &x);
+        let fd = fd_gradient(|x| obj.value(x), &x);
         assert!(
             (grad - fd[0]).abs() < FD_TOL,
             "sinh gradient mismatch at x={}: got {}, fd={}",
@@ -84,7 +84,7 @@ fn test_cosh_gradient_matches_fd() {
         let (idx, grad) = entries[0];
         assert_eq!(idx, 0);
 
-        let fd = fd_gradient(|x| x[0].cosh(), &x);
+        let fd = fd_gradient(|x| obj.value(x), &x);
         assert!(
             (grad - fd[0]).abs() < FD_TOL,
             "cosh gradient mismatch at x={}: got {}, fd={}",
@@ -120,7 +120,7 @@ fn test_tanh_gradient_matches_fd() {
         let (idx, grad) = entries[0];
         assert_eq!(idx, 0);
 
-        let fd = fd_gradient(|x| x[0].tanh(), &x);
+        let fd = fd_gradient(|x| obj.value(x), &x);
         assert!(
             (grad - fd[0]).abs() < FD_TOL,
             "tanh gradient mismatch at x={}: got {}, fd={}",
@@ -155,7 +155,7 @@ fn test_asin_gradient_matches_fd() {
         let (idx, grad) = entries[0];
         assert_eq!(idx, 0);
 
-        let fd = fd_gradient(|x| x[0].asin(), &x);
+        let fd = fd_gradient(|x| obj.value(x), &x);
         assert!(
             (grad - fd[0]).abs() < FD_TOL,
             "asin gradient mismatch at x={}: got {}, fd={}",
@@ -190,7 +190,7 @@ fn test_acos_gradient_matches_fd() {
         let (idx, grad) = entries[0];
         assert_eq!(idx, 0);
 
-        let fd = fd_gradient(|x| x[0].acos(), &x);
+        let fd = fd_gradient(|x| obj.value(x), &x);
         assert!(
             (grad - fd[0]).abs() < FD_TOL,
             "acos gradient mismatch at x={}: got {}, fd={}",
@@ -226,7 +226,7 @@ fn test_sinh_tanh_composed_gradient_matches_fd() {
         let (idx, grad) = entries[0];
         assert_eq!(idx, 0);
 
-        let fd = fd_gradient(|x| x[0].sinh().tanh(), &x);
+        let fd = fd_gradient(|x| obj.value(x), &x);
         assert!(
             (grad - fd[0]).abs() < FD_TOL,
             "sinh.tanh() gradient mismatch at x={}: got {}, fd={}",
@@ -255,6 +255,8 @@ impl AsinConstObjective {
 fn test_asin_const_simplification() {
     let obj = AsinConstObjective;
     let x = vec![1.0];
+    // asin(0.0) folds to 0, so the objective is just x[0].
+    assert!((obj.value(&x) - 1.0).abs() < 1e-15);
     let entries = obj.gradient_entries(&x);
     // d/dx[0] (x[0] + asin(0.0)) = 1.0
     assert_eq!(entries.len(), 1);

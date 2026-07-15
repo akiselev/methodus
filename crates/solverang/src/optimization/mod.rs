@@ -26,11 +26,16 @@ pub mod multiplier_store;
 pub mod objective;
 pub mod result;
 
-pub use config::{MultiplierInitStrategy, OptimizationAlgorithm, OptimizationConfig};
+pub use config::{
+    AlmConfig, LineSearchConfig, MultiplierInitStrategy, OptimizationAlgorithm, OptimizationConfig,
+    TrustRegionConfig,
+};
 pub use inequality::InequalityFn;
 pub use multiplier_store::{MultiplierId, MultiplierStore};
 pub use objective::{Objective, ObjectiveHessian};
-pub use result::{KktResidual, OptimizationResult, OptimizationStatus};
+pub use result::{
+    KktResidual, LineSearchError, LineSearchFailure, OptimizationResult, OptimizationStatus,
+};
 
 use crate::id::Generation;
 use std::fmt;

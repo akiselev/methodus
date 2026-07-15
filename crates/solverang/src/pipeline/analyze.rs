@@ -1,7 +1,7 @@
 //! Default implementation of the [`Analyze`] pipeline phase.
 //!
 //! [`DefaultAnalyze`] wraps the existing analysis modules
-//! ([`crate::graph::redundancy`], [`crate::graph::dof`], [`crate::graph::pattern`]) behind the
+//! (`graph::redundancy`, `graph::dof`, `graph::pattern`) behind the
 //! [`Analyze`] trait, allowing the user to toggle individual analyses and
 //! configure tolerances.
 //!
@@ -204,13 +204,16 @@ mod tests {
 
     // -- Stub constraint -----------------------------------------------------
 
+    type StubResidualFn = Box<dyn Fn(&ParamStore) -> Vec<f64> + Send + Sync>;
+    type StubJacobianFn = Box<dyn Fn(&ParamStore) -> Vec<(usize, ParamId, f64)> + Send + Sync>;
+
     struct StubConstraint {
         id: ConstraintId,
         entities: Vec<EntityId>,
         params: Vec<ParamId>,
         neq: usize,
-        residual_fn: Box<dyn Fn(&ParamStore) -> Vec<f64> + Send + Sync>,
-        jacobian_fn: Box<dyn Fn(&ParamStore) -> Vec<(usize, ParamId, f64)> + Send + Sync>,
+        residual_fn: StubResidualFn,
+        jacobian_fn: StubJacobianFn,
     }
 
     impl Constraint for StubConstraint {

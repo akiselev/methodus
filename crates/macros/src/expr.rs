@@ -380,53 +380,7 @@ impl Expr {
         }
     }
 
-    /// Collect all variable references in this expression.
-    #[allow(dead_code)]
-    pub fn collect_variables(&self) -> Vec<VarRef> {
-        let mut vars = Vec::new();
-        self.collect_variables_into(&mut vars);
-        vars
-    }
-
-    fn collect_variables_into(&self, vars: &mut Vec<VarRef>) {
-        match self {
-            Expr::Var(vref) => {
-                if !vars.iter().any(|v| v.id == vref.id) {
-                    vars.push(vref.clone());
-                }
-            }
-            Expr::Const(_) | Expr::RuntimeConst(_) => {}
-            Expr::Neg(e)
-            | Expr::Sqrt(e)
-            | Expr::Sin(e)
-            | Expr::Cos(e)
-            | Expr::Tan(e)
-            | Expr::Abs(e)
-            | Expr::Ln(e)
-            | Expr::Exp(e)
-            | Expr::Asin(e)
-            | Expr::Acos(e)
-            | Expr::Sinh(e)
-            | Expr::Cosh(e)
-            | Expr::Tanh(e) => {
-                e.collect_variables_into(vars);
-            }
-            Expr::Pow(base, _) => {
-                base.collect_variables_into(vars);
-            }
-            Expr::Add(a, b)
-            | Expr::Sub(a, b)
-            | Expr::Mul(a, b)
-            | Expr::Div(a, b)
-            | Expr::Atan2(a, b) => {
-                a.collect_variables_into(vars);
-                b.collect_variables_into(vars);
-            }
-        }
-    }
-
     /// Generate Rust code for this expression.
-    #[allow(dead_code)]
     pub fn to_tokens(&self) -> TokenStream {
         match self {
             Expr::Var(vref) => {

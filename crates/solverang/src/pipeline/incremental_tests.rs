@@ -238,6 +238,7 @@ mod tests {
     ///   - The EliminateReducer eliminates px analytically.
     ///   - The SumConstraint remains and is solved numerically for py.
     ///   - The cluster status is Converged (not Skipped).
+    ///
     /// Returns (entity_id, px, py).
     fn add_coupled_point(
         system: &mut ConstraintSystem,
@@ -437,7 +438,7 @@ mod tests {
             "Round 4: expected all 3 clusters skipped, statuses: {:?}",
             r4.clusters.iter().map(|c| c.status).collect::<Vec<_>>(),
         );
-        assert_eq!(r4.total_iterations, 0, "Round 4: expected 0 iterations");
+        assert_eq!(r4.iterations, 0, "Round 4: expected 0 iterations");
     }
 
     #[test]
@@ -567,7 +568,7 @@ mod tests {
         // First solve from cold start: all params start at 0.0.
         let r1 = system.solve();
         assert_solved(&r1);
-        let first_iterations = r1.total_iterations;
+        let first_iterations = r1.iterations;
         assert!(
             (system.get_param(px) - 5.0).abs() < 1e-6,
             "px = {}",
@@ -585,7 +586,7 @@ mod tests {
         // Second solve: warm start from cached solution should help.
         let r2 = system.solve_incremental();
         assert_solved(&r2);
-        let second_iterations = r2.total_iterations;
+        let second_iterations = r2.iterations;
 
         // Warm start should use fewer or equal iterations since we're
         // starting closer to the solution.
@@ -680,9 +681,9 @@ mod tests {
         // - c2 has one free param, should be eliminated analytically.
         // Either way, the total iterations should be minimal.
         assert!(
-            result.total_iterations <= 1,
+            result.iterations <= 1,
             "Expected minimal iterations due to reduction, got {}",
-            result.total_iterations,
+            result.iterations,
         );
 
         // Verify py = 10.0.
@@ -741,9 +742,9 @@ mod tests {
 
         // Verify low iteration count (reduction should handle most work).
         assert!(
-            result.total_iterations <= 2,
+            result.iterations <= 2,
             "Expected minimal iterations due to merge + elimination, got {}",
-            result.total_iterations,
+            result.iterations,
         );
     }
 
@@ -963,9 +964,9 @@ mod tests {
         let r2 = system.solve_incremental();
         assert_solved(&r2);
         assert_eq!(
-            r2.total_iterations, 0,
+            r2.iterations, 0,
             "Expected 0 iterations when nothing changed, got {}",
-            r2.total_iterations,
+            r2.iterations,
         );
 
         // All clusters should be skipped.

@@ -101,6 +101,13 @@ impl ParamStore {
         self.entry(id).expect("is_fixed: invalid ParamId").fixed
     }
 
+    /// Whether `id` refers to a live parameter (valid slot, current
+    /// generation, not freed). Never panics — use this to validate IDs of
+    /// unknown provenance before calling the accessors.
+    pub fn is_alive(&self, id: ParamId) -> bool {
+        self.entry(id).is_some()
+    }
+
     /// Mark a parameter as fixed (excluded from solving).
     pub fn fix(&mut self, id: ParamId) {
         self.entry_mut(id).expect("fix: invalid ParamId").fixed = true;
@@ -313,16 +320,16 @@ mod tests {
     #[test]
     fn test_alloc_and_get() {
         let mut store = ParamStore::new();
-        let id = store.alloc(3.14, dummy_owner());
-        assert!((store.get(id) - 3.14).abs() < 1e-15);
+        let id = store.alloc(3.5, dummy_owner());
+        assert!((store.get(id) - 3.5).abs() < 1e-15);
     }
 
     #[test]
     fn test_set() {
         let mut store = ParamStore::new();
         let id = store.alloc(0.0, dummy_owner());
-        store.set(id, 2.718);
-        assert!((store.get(id) - 2.718).abs() < 1e-15);
+        store.set(id, 2.5);
+        assert!((store.get(id) - 2.5).abs() < 1e-15);
     }
 
     #[test]

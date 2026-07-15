@@ -381,9 +381,9 @@ fn build_conflict_groups(
 
     // Collect groups.
     let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
-    for i in 0..n {
+    for (i, &ci) in conflicting.iter().enumerate() {
         let root = find(&mut parent, i);
-        groups.entry(root).or_default().push(conflicting[i]);
+        groups.entry(root).or_default().push(ci);
     }
 
     groups
@@ -416,13 +416,16 @@ mod tests {
 
     // -- Stub constraint for testing -----------------------------------------
 
+    type StubResidualFn = Box<dyn Fn(&ParamStore) -> Vec<f64> + Send + Sync>;
+    type StubJacobianFn = Box<dyn Fn(&ParamStore) -> Vec<(usize, ParamId, f64)> + Send + Sync>;
+
     struct TestConstraint {
         id: ConstraintId,
         entities: Vec<EntityId>,
         params: Vec<ParamId>,
         neq: usize,
-        residual_fn: Box<dyn Fn(&ParamStore) -> Vec<f64> + Send + Sync>,
-        jacobian_fn: Box<dyn Fn(&ParamStore) -> Vec<(usize, ParamId, f64)> + Send + Sync>,
+        residual_fn: StubResidualFn,
+        jacobian_fn: StubJacobianFn,
     }
 
     impl Constraint for TestConstraint {

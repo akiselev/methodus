@@ -1,6 +1,6 @@
 //! Ephemeral storage for Lagrange multipliers (dual variables).
 //!
-//! Multipliers are separate from [`ParamStore`] because they lack entity
+//! Multipliers are separate from [`crate::param::ParamStore`] because they lack entity
 //! ownership, fixed/free semantics, and change-tracking. They are recomputed
 //! on each `optimize()` call.
 
@@ -128,7 +128,7 @@ impl MultiplierStore {
                     }
                 }
                 None => {
-                    result.extend(std::iter::repeat(0.0).take(n));
+                    result.extend(std::iter::repeat_n(0.0, n));
                 }
             }
         }
@@ -150,7 +150,7 @@ impl MultiplierStore {
                     }
                 }
                 None => {
-                    result.extend(std::iter::repeat(0.0).take(n));
+                    result.extend(std::iter::repeat_n(0.0, n));
                 }
             }
         }

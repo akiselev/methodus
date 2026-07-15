@@ -145,54 +145,23 @@ impl AutoSolver {
     ///
     /// A `SolveResult` indicating success or failure of the optimization.
     pub fn solve<P: Problem + ?Sized>(&self, problem: &P, x0: &[f64]) -> SolveResult {
-        match self.select_solver(problem) {
-            SolverChoice::NewtonRaphson => {
-                let solver = NRSolver::new(self.nr_config.clone());
-                solver.solve(problem, x0)
-            }
-            SolverChoice::LevenbergMarquardt | SolverChoice::Auto => {
-                let solver = LMSolver::new(self.lm_config.clone());
-                solver.solve(problem, x0)
-            }
-        }
+        super::common::solve_with_choice(self.choice, &self.nr_config, &self.lm_config, problem, x0)
     }
 
-    /// Solve using the problem's default initial point.
+    /// Solve from the problem's own starting point: `factor` scales
+    /// [`Problem::initial_point`] (MINPACK convention: 1, 10, 100 test
+    /// robustness to increasingly distant starts).
     pub fn solve_from_initial<P: Problem + ?Sized>(&self, problem: &P, factor: f64) -> SolveResult {
         let x0 = problem.initial_point(factor);
         self.solve(problem, &x0)
     }
 
-    /// Determine which solver to use based on problem characteristics and configuration.
-    fn select_solver<P: Problem + ?Sized>(&self, problem: &P) -> SolverChoice {
-        match self.choice {
-            SolverChoice::NewtonRaphson => SolverChoice::NewtonRaphson,
-            SolverChoice::LevenbergMarquardt => SolverChoice::LevenbergMarquardt,
-            SolverChoice::Auto => self.auto_select(problem),
-        }
-    }
-
-    /// Automatically select a solver based on problem characteristics.
-    ///
-    /// Selection criteria:
-    /// - Square systems (m == n): prefer Newton-Raphson
-    /// - Non-square systems: use Levenberg-Marquardt
-    fn auto_select<P: Problem + ?Sized>(&self, problem: &P) -> SolverChoice {
-        let m = problem.residual_count();
-        let n = problem.variable_count();
-
-        if m == n {
-            // Square system: Newton-Raphson converges faster when applicable
-            SolverChoice::NewtonRaphson
-        } else {
-            // Non-square system: LM handles these better
-            SolverChoice::LevenbergMarquardt
-        }
-    }
-
     /// Determine which solver was selected for a problem (for diagnostics).
+    ///
+    /// `Auto` resolves from the problem shape: square systems get
+    /// Newton-Raphson, everything else Levenberg-Marquardt.
     pub fn which_solver<P: Problem + ?Sized>(&self, problem: &P) -> SolverChoice {
-        self.select_solver(problem)
+        super::common::resolve_choice(self.choice, problem)
     }
 }
 
@@ -306,7 +275,9 @@ impl RobustSolver {
         }
     }
 
-    /// Solve using the problem's default initial point.
+    /// Solve from the problem's own starting point: `factor` scales
+    /// [`Problem::initial_point`] (MINPACK convention: 1, 10, 100 test
+    /// robustness to increasingly distant starts).
     pub fn solve_from_initial<P: Problem + ?Sized>(&self, problem: &P, factor: f64) -> SolveResult {
         let x0 = problem.initial_point(factor);
         self.solve(problem, &x0)

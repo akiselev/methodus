@@ -20,6 +20,32 @@ impl KktResidual {
     }
 }
 
+/// Why a line search gave up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineSearchError {
+    /// The supplied direction is not a descent direction (`∇f·d ≥ 0`).
+    NotDescentDirection,
+    /// The objective or gradient produced a non-finite value.
+    NonFiniteValue,
+    /// The step shrank below `line_search_min_step` without satisfying Armijo.
+    StepTooSmall,
+    /// The evaluation budget (`line_search_max_evals`) was exhausted.
+    EvaluationBudgetExceeded,
+    /// No feasible step exists along the direction (`alpha_max ≤ 0`).
+    InfeasibleDirection,
+}
+
+/// A failed line search, with the evaluations consumed before giving up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineSearchFailure {
+    /// The failure reason.
+    pub reason: LineSearchError,
+    /// Number of objective evaluations consumed.
+    pub f_evals: usize,
+    /// Number of gradient evaluations consumed.
+    pub grad_evals: usize,
+}
+
 /// Status of an optimization solve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OptimizationStatus {
@@ -33,16 +59,16 @@ pub enum OptimizationStatus {
     Diverged,
     /// The penalty parameter saturated without further feasibility progress.
     Stalled,
-    /// A line search failed to make progress; the reported point is the best found.
-    LineSearchFailed,
+    /// A line search failed to make progress; the reported point is the best
+    /// found. Carries the failure reason and evaluation counts.
+    LineSearchFailed(LineSearchFailure),
     /// The selected algorithm cannot solve the registered problem structure
-    /// (e.g. BFGS explicitly selected while equality constraints exist).
+    /// (e.g. BFGS explicitly selected while equality constraints exist), or
+    /// the configuration itself is invalid.
     UnsupportedProblemStructure {
         /// Human-readable description of the mismatch.
-        reason: &'static str,
+        reason: String,
     },
-    /// Optimization not yet implemented (stub).
-    NotImplemented,
 }
 
 impl OptimizationStatus {
@@ -53,6 +79,11 @@ impl OptimizationStatus {
 }
 
 /// Result of an optimization solve.
+///
+/// Fields are public for direct access; [`is_converged`](Self::is_converged)
+/// and [`iterations`](Self::iterations) mirror the accessor vocabulary of
+/// [`SolveResult`](crate::solver::SolveResult) so the two solver families
+/// read uniformly at call sites.
 #[derive(Debug)]
 pub struct OptimizationResult {
     /// Final objective value f(x*).
@@ -74,21 +105,15 @@ pub struct OptimizationResult {
 }
 
 impl OptimizationResult {
-    /// Create a stub result for the not-yet-implemented case.
-    pub(crate) fn not_implemented() -> Self {
-        Self {
-            objective_value: f64::NAN,
-            status: OptimizationStatus::NotImplemented,
-            outer_iterations: 0,
-            inner_iterations: 0,
-            kkt_residual: KktResidual {
-                primal: f64::INFINITY,
-                dual: f64::INFINITY,
-                complementarity: f64::INFINITY,
-            },
-            multipliers: MultiplierStore::new(),
-            constraint_violations: Vec::new(),
-            duration: std::time::Duration::ZERO,
-        }
+    /// Whether the solve converged (KKT conditions within tolerance).
+    pub fn is_converged(&self) -> bool {
+        self.status.is_converged()
+    }
+
+    /// Headline iteration count: outer iterations (ALM outer loop, or
+    /// BFGS/trust-region iterations). Matches the semantics of
+    /// `SolveResult::iterations()`.
+    pub fn iterations(&self) -> usize {
+        self.outer_iterations
     }
 }

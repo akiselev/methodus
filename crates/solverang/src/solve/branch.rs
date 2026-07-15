@@ -128,7 +128,6 @@ pub fn generate_branch_starts(
     perturbation_scale: f64,
     num_branches: usize,
 ) -> Vec<Vec<f64>> {
-    let n = initial.len();
     let mut starts = Vec::with_capacity(num_branches + 1);
 
     // Always include the unperturbed initial point.
@@ -136,13 +135,13 @@ pub fn generate_branch_starts(
 
     for branch in 0..num_branches {
         let mut perturbed = initial.to_vec();
-        for j in 0..n {
+        for (j, p) in perturbed.iter_mut().enumerate() {
             // Deterministic perturbation using a simple hash-like scheme.
             // Alternate sign based on (branch + j) parity, scale by a
             // varying factor to explore different directions.
             let sign = if (branch + j) % 2 == 0 { 1.0 } else { -1.0 };
             let factor = 1.0 + ((branch as f64 + 1.0) * (j as f64 + 1.0)).sin();
-            perturbed[j] += sign * perturbation_scale * factor;
+            *p += sign * perturbation_scale * factor;
         }
         starts.push(perturbed);
     }

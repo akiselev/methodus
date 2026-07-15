@@ -58,26 +58,8 @@ impl Solver {
         let n = problem.variable_count();
         let m = problem.residual_count();
 
-        // Validate problem dimensions
-        if n == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoVariables,
-            };
-        }
-
-        if m == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoEquations,
-            };
-        }
-
-        if x0.len() != n {
-            return SolveResult::Failed {
-                error: SolveError::DimensionMismatch {
-                    expected: n,
-                    got: x0.len(),
-                },
-            };
+        if let Err(error) = super::common::validate_problem(problem, x0) {
+            return error.into();
         }
 
         let mut x = DVector::from_column_slice(x0);
@@ -86,11 +68,8 @@ impl Solver {
             // Compute residuals
             let residuals = problem.residuals(x.as_slice());
 
-            // Check for non-finite residuals
-            if residuals.iter().any(|r| !r.is_finite()) {
-                return SolveResult::Failed {
-                    error: SolveError::NonFiniteResiduals,
-                };
+            if let Err(error) = super::common::check_residuals_finite(&residuals) {
+                return error.into();
             }
 
             let r = DVector::from_column_slice(&residuals);
@@ -108,11 +87,8 @@ impl Solver {
             // Compute Jacobian
             let jac_entries = problem.jacobian(x.as_slice());
 
-            // Check for non-finite Jacobian entries
-            if jac_entries.iter().any(|(_, _, v)| !v.is_finite()) {
-                return SolveResult::Failed {
-                    error: SolveError::NonFiniteJacobian,
-                };
+            if let Err(error) = super::common::check_jacobian_finite(&jac_entries) {
+                return error.into();
             }
 
             let mut j = DMatrix::zeros(m, n);
@@ -166,7 +142,9 @@ impl Solver {
         }
     }
 
-    /// Solve using the problem's default initial point.
+    /// Solve from the problem's own starting point: `factor` scales
+    /// [`Problem::initial_point`] (MINPACK convention: 1, 10, 100 test
+    /// robustness to increasingly distant starts).
     pub fn solve_from_initial<P: Problem + ?Sized>(&self, problem: &P, factor: f64) -> SolveResult {
         let x0 = problem.initial_point(factor);
         self.solve(problem, &x0)

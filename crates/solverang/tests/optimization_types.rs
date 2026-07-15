@@ -50,9 +50,9 @@ fn multiplier_store_set_get() {
     let cid = ConstraintId::new(0, 0);
     let mid = MultiplierId::new(cid, 0);
 
-    store.set(mid, 3.14);
+    store.set(mid, 3.5);
     assert_eq!(store.len(), 1);
-    assert_eq!(store.get(mid), Some(3.14));
+    assert_eq!(store.get(mid), Some(3.5));
 }
 
 #[test]
@@ -107,16 +107,15 @@ fn optimization_config_defaults() {
     assert_eq!(config.algorithm, solverang::OptimizationAlgorithm::Auto);
     assert!(config.outer_tolerance > 0.0);
     assert!(config.inner_tolerance > 0.0);
-    assert!(config.rho_init > 0.0);
+    assert!(config.alm.rho_init > 0.0);
     assert!(config.lbfgs_memory > 0);
 }
 
 #[test]
 fn optimization_result_status_variants() {
-    // Test status enum variants (not_implemented is pub(crate))
     let result = OptimizationResult {
         objective_value: f64::NAN,
-        status: OptimizationStatus::NotImplemented,
+        status: OptimizationStatus::MaxIterationsReached,
         outer_iterations: 0,
         inner_iterations: 0,
         kkt_residual: solverang::KktResidual {
@@ -128,7 +127,7 @@ fn optimization_result_status_variants() {
         constraint_violations: Vec::new(),
         duration: std::time::Duration::ZERO,
     };
-    assert_eq!(result.status, OptimizationStatus::NotImplemented);
+    assert_eq!(result.status, OptimizationStatus::MaxIterationsReached);
     assert!(!result.status.is_converged());
     assert!(result.objective_value.is_nan());
     assert!(result.multipliers.is_empty());
@@ -140,7 +139,6 @@ fn optimization_status_is_converged() {
     assert!(!OptimizationStatus::MaxIterationsReached.is_converged());
     assert!(!OptimizationStatus::Infeasible.is_converged());
     assert!(!OptimizationStatus::Diverged.is_converged());
-    assert!(!OptimizationStatus::NotImplemented.is_converged());
 }
 
 #[test]
@@ -208,9 +206,12 @@ fn constraint_system_set_objective() {
 fn constraint_system_optimize_without_objective_returns_error() {
     let mut system = ConstraintSystem::new();
     let result = system.optimize();
-    // No objective set → infeasible/error status
+    // No objective set → the problem is malformed, not infeasible.
     assert!(!result.status.is_converged());
-    assert_eq!(result.status, OptimizationStatus::Infeasible);
+    assert!(matches!(
+        result.status,
+        OptimizationStatus::UnsupportedProblemStructure { .. }
+    ));
 }
 
 #[test]
@@ -251,8 +252,10 @@ fn constraint_system_opt_config() {
         solverang::OptimizationAlgorithm::Auto
     );
 
-    let mut config = OptimizationConfig::default();
-    config.algorithm = solverang::OptimizationAlgorithm::Bfgs;
+    let config = OptimizationConfig {
+        algorithm: solverang::OptimizationAlgorithm::Bfgs,
+        ..Default::default()
+    };
     system.set_opt_config(config);
     assert_eq!(
         system.opt_config().algorithm,

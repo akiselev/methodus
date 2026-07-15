@@ -60,6 +60,19 @@ pub use cranelift::{JITCompiler, JITError, JITFunction};
 pub use lower::OpcodeEmitter;
 pub use opcodes::{CompiledConstraints, ConstraintOp, JacobianEntry, Reg, ValidationError};
 
+/// When to JIT-compile constraint evaluation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JitMode {
+    /// Compile when the estimated work exceeds `jit_threshold` and the
+    /// platform supports JIT (the default).
+    #[default]
+    Auto,
+    /// Always compile, regardless of problem size. Useful for benchmarking.
+    ForceJit,
+    /// Never compile; always use interpreted evaluation. Useful for debugging.
+    ForceInterpreted,
+}
+
 /// Configuration for JIT-enabled solving.
 #[derive(Clone, Debug)]
 pub struct JITConfig {
@@ -84,17 +97,10 @@ pub struct JITConfig {
     /// Default: 1e-8
     pub tolerance: f64,
 
-    /// Whether to force JIT compilation regardless of problem size.
+    /// When to JIT-compile (auto by threshold, forced on, or forced off).
     ///
-    /// Useful for benchmarking.
-    /// Default: false
-    pub force_jit: bool,
-
-    /// Whether to force interpreted evaluation regardless of problem size.
-    ///
-    /// Useful for debugging.
-    /// Default: false
-    pub force_interpreted: bool,
+    /// Default: [`JitMode::Auto`]
+    pub mode: JitMode,
 }
 
 impl Default for JITConfig {
@@ -104,8 +110,7 @@ impl Default for JITConfig {
             estimated_iterations: 50,
             max_iterations: 200,
             tolerance: 1e-8,
-            force_jit: false,
-            force_interpreted: false,
+            mode: JitMode::Auto,
         }
     }
 }
@@ -114,7 +119,7 @@ impl JITConfig {
     /// Create a configuration that always uses JIT compilation.
     pub fn always_jit() -> Self {
         Self {
-            force_jit: true,
+            mode: JitMode::ForceJit,
             ..Default::default()
         }
     }
@@ -122,7 +127,7 @@ impl JITConfig {
     /// Create a configuration that always uses interpreted evaluation.
     pub fn always_interpreted() -> Self {
         Self {
-            force_interpreted: true,
+            mode: JitMode::ForceInterpreted,
             ..Default::default()
         }
     }

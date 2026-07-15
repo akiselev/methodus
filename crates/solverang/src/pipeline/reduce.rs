@@ -1,6 +1,7 @@
 //! Pipeline `Reduce` implementations.
 //!
-//! Wraps the low-level reduction passes from [`crate::reduce`] into the
+//! Wraps the low-level reduction passes from the crate-internal `reduce`
+//! module into the
 //! pipeline's [`Reduce`] trait, plus a [`ChainedReducer`] compositor and
 //! sensible defaults ([`DefaultReduce`], [`NoopReduce`]).
 
@@ -38,7 +39,7 @@ impl Reduce for NoopReduce {
 // SubstituteReducer
 // ---------------------------------------------------------------------------
 
-/// Wraps [`analyze_substitutions`] to identify constraints that are trivially
+/// Wraps `analyze_substitutions` to identify constraints that are trivially
 /// satisfied (all params fixed, residual near zero) or trivially violated
 /// (all params fixed, residual far from zero).
 ///
@@ -104,7 +105,7 @@ impl Reduce for SubstituteReducer {
 /// Tolerance for checking whether a Jacobian entry matches +1 or -1.
 const JACOBIAN_TOLERANCE: f64 = 1e-10;
 
-/// Wraps [`detect_merges`] and [`build_substitution_map`] to identify
+/// Wraps `detect_merges` and `build_substitution_map` to identify
 /// coincident-parameter equality constraints.
 ///
 /// Equality constraints whose params form a detected merge pair are added to
@@ -236,7 +237,7 @@ impl Reduce for MergeReducer {
 // EliminateReducer
 // ---------------------------------------------------------------------------
 
-/// Wraps [`detect_trivial_eliminations`] to analytically solve single-free-
+/// Wraps `detect_trivial_eliminations` to analytically solve single-free-
 /// parameter constraints.
 ///
 /// Eliminated parameters are added to `eliminated_params` with their

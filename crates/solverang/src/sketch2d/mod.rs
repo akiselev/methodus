@@ -7,7 +7,7 @@ pub mod builder;
 pub mod constraints;
 pub mod entities;
 
-pub use builder::Sketch2DBuilder;
+pub use builder::{BuilderError, CircleHandle, LineHandle, PointHandle, Sketch2DBuilder};
 pub use constraints::{
     Angle, Coincident, Collinear, DistancePtLine, DistancePtPt, EqualLength, EqualRadius, Fixed,
     Horizontal, Midpoint, Parallel, Perpendicular, PointOnCircle, Symmetric, TangentCircleCircle,

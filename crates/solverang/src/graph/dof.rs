@@ -176,14 +176,6 @@ pub fn analyze_dof(
     }
 }
 
-/// Quick DOF estimate without SVD (just count equations vs variables).
-///
-/// Returns `free_param_count - equation_count`.  This is an upper bound on
-/// the true DOF because it assumes all equations are independent.
-pub fn quick_dof(free_param_count: usize, equation_count: usize) -> i32 {
-    free_param_count as i32 - equation_count as i32
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -279,13 +271,16 @@ mod tests {
         }
     }
 
+    type StubResidualFn = Box<dyn Fn(&ParamStore) -> Vec<f64> + Send + Sync>;
+    type StubJacobianFn = Box<dyn Fn(&ParamStore) -> Vec<(usize, ParamId, f64)> + Send + Sync>;
+
     struct StubConstraint {
         id: ConstraintId,
         entities: Vec<EntityId>,
         params: Vec<ParamId>,
         neq: usize,
-        residual_fn: Box<dyn Fn(&ParamStore) -> Vec<f64> + Send + Sync>,
-        jacobian_fn: Box<dyn Fn(&ParamStore) -> Vec<(usize, ParamId, f64)> + Send + Sync>,
+        residual_fn: StubResidualFn,
+        jacobian_fn: StubJacobianFn,
     }
 
     impl Constraint for StubConstraint {
@@ -313,14 +308,6 @@ mod tests {
     }
 
     // -- Tests ---------------------------------------------------------------
-
-    #[test]
-    fn test_quick_dof() {
-        assert_eq!(quick_dof(4, 2), 2);
-        assert_eq!(quick_dof(2, 2), 0);
-        assert_eq!(quick_dof(1, 3), -2);
-        assert_eq!(quick_dof(0, 0), 0);
-    }
 
     #[test]
     fn test_unconstrained_entity() {

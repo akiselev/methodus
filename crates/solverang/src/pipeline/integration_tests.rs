@@ -638,10 +638,10 @@ fn test_builder_triangle_through_pipeline() {
     let p1 = b.add_point(5.0, 0.5); // perturbed
     let p2 = b.add_point(2.5, 4.0); // perturbed
 
-    b.constrain_horizontal(p0, p1);
-    b.constrain_distance(p0, p1, 5.0);
-    b.constrain_distance(p1, p2, 5.0);
-    b.constrain_distance(p2, p0, 5.0);
+    b.constrain_horizontal(p0, p1).unwrap();
+    b.constrain_distance(p0, p1, 5.0).unwrap();
+    b.constrain_distance(p1, p2, 5.0).unwrap();
+    b.constrain_distance(p2, p0, 5.0).unwrap();
 
     let mut sys = b.build();
     let result = sys.solve();
@@ -669,26 +669,26 @@ fn test_builder_rectangle_perpendicular_equal() {
     let p2 = b.add_point(6.5, 4.5); // perturbed
     let p3 = b.add_point(0.5, 4.0); // perturbed
 
-    let l01 = b.add_line_segment(p0, p1);
-    let l12 = b.add_line_segment(p1, p2);
-    let l23 = b.add_line_segment(p2, p3);
-    let l30 = b.add_line_segment(p3, p0);
+    let l01 = b.add_line_segment(p0, p1).unwrap();
+    let l12 = b.add_line_segment(p1, p2).unwrap();
+    let l23 = b.add_line_segment(p2, p3).unwrap();
+    let l30 = b.add_line_segment(p3, p0).unwrap();
 
     // Perpendicular at each vertex.
-    b.constrain_perpendicular(l01, l12);
-    b.constrain_perpendicular(l12, l23);
-    b.constrain_perpendicular(l23, l30);
+    b.constrain_perpendicular(l01, l12).unwrap();
+    b.constrain_perpendicular(l12, l23).unwrap();
+    b.constrain_perpendicular(l23, l30).unwrap();
 
     // Side lengths.
-    b.constrain_distance(p0, p1, 6.0);
-    b.constrain_distance(p1, p2, 4.0);
+    b.constrain_distance(p0, p1, 6.0).unwrap();
+    b.constrain_distance(p1, p2, 4.0).unwrap();
 
     // Equal opposite sides.
-    b.constrain_equal_length(l01, l23);
-    b.constrain_equal_length(l12, l30);
+    b.constrain_equal_length(l01, l23).unwrap();
+    b.constrain_equal_length(l12, l30).unwrap();
 
     // Fix orientation.
-    b.constrain_horizontal(p0, p1);
+    b.constrain_horizontal(p0, p1).unwrap();
 
     let mut sys = b.build();
     let result = sys.solve();
@@ -715,7 +715,7 @@ fn test_builder_point_on_circle_with_distance() {
     let circle = b.add_circle(0.0, 0.0, 5.0);
 
     // Fix circle params.
-    let cp = b.entity_param_ids(circle).to_vec();
+    let cp = b.entity_param_ids(circle).unwrap().to_vec();
     for &pid in &cp {
         b.fix_param(pid);
     }
@@ -723,9 +723,9 @@ fn test_builder_point_on_circle_with_distance() {
     let p1 = b.add_point(4.5, 2.0); // near the circle
     let p2 = b.add_point(-3.0, 4.0); // near the circle
 
-    b.constrain_point_on_circle(p1, circle);
-    b.constrain_point_on_circle(p2, circle);
-    b.constrain_distance(p1, p2, 6.0);
+    b.constrain_point_on_circle(p1, circle).unwrap();
+    b.constrain_point_on_circle(p2, circle).unwrap();
+    b.constrain_distance(p1, p2, 6.0).unwrap();
 
     let mut sys = b.build();
     let result = sys.solve();
@@ -752,12 +752,12 @@ fn test_builder_incremental_triangle() {
     let p1 = b.add_point(3.0, 0.5);
     let p2 = b.add_point(0.5, 4.0);
 
-    b.constrain_horizontal(p0, p1);
-    b.constrain_distance(p0, p1, 3.0);
-    b.constrain_distance(p1, p2, 5.0);
-    b.constrain_distance(p2, p0, 4.0);
+    b.constrain_horizontal(p0, p1).unwrap();
+    b.constrain_distance(p0, p1, 3.0).unwrap();
+    b.constrain_distance(p1, p2, 5.0).unwrap();
+    b.constrain_distance(p2, p0, 4.0).unwrap();
 
-    let p2_params = b.entity_param_ids(p2).to_vec();
+    let p2_params = b.entity_param_ids(p2).unwrap().to_vec();
 
     let mut sys = b.build();
 
@@ -796,11 +796,11 @@ fn test_builder_two_independent_shapes() {
     // Shape 1: two coincident points.
     let s1p0 = b.add_fixed_point(1.0, 2.0);
     let s1p1 = b.add_point(1.5, 2.5);
-    b.constrain_coincident(s1p0, s1p1);
+    b.constrain_coincident(s1p0, s1p1).unwrap();
 
     // Shape 2: a fixed point far away (completely independent).
     let s2p0 = b.add_point(50.0, 50.5);
-    b.constrain_fixed(s2p0, 50.0, 50.0);
+    b.constrain_fixed(s2p0, 50.0, 50.0).unwrap();
 
     let mut sys = b.build();
     let result = sys.solve();
@@ -828,23 +828,23 @@ fn test_midpoint_and_symmetric() {
     // Line endpoints.
     let p0 = b.add_fixed_point(0.0, 0.0);
     let p1 = b.add_fixed_point(10.0, 0.0);
-    let line = b.add_line_segment(p0, p1);
+    let line = b.add_line_segment(p0, p1).unwrap();
 
     // Midpoint.
     let mid = b.add_point(4.0, 1.0); // off-center guess
-    b.constrain_midpoint(mid, line);
+    b.constrain_midpoint(mid, line).unwrap();
 
     // Two points symmetric about the midpoint.
     let sym1 = b.add_point(3.0, 2.0);
     let sym2 = b.add_point(8.0, -1.0);
-    b.constrain_symmetric(sym1, sym2, mid);
+    b.constrain_symmetric(sym1, sym2, mid).unwrap();
 
     // Fix sym1 position.
-    b.constrain_fixed(sym1, 3.0, 2.0);
+    b.constrain_fixed(sym1, 3.0, 2.0).unwrap();
 
     // Extract param IDs before build() consumes the builder.
-    let mid_params = b.entity_param_ids(mid).to_vec();
-    let sym2_params = b.entity_param_ids(sym2).to_vec();
+    let mid_params = b.entity_param_ids(mid).unwrap().to_vec();
+    let sym2_params = b.entity_param_ids(sym2).unwrap().to_vec();
 
     let mut sys = b.build();
     let result = sys.solve();

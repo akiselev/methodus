@@ -1,6 +1,6 @@
 # Solverang -- Repository Status
 
-*Last updated: 2026-05-03*
+*Last updated: 2026-07-15*
 
 ## Overview
 
@@ -10,14 +10,37 @@ Solverang is a domain-agnostic numerical solver for nonlinear systems and least-
 
 ## Latest Work
 
-- Added host-provided solve timing for constraint systems: `SolveClock`,
-  `StdClock`, `ZeroClock`, `ConstraintSystem::solve_with_clock`, and
-  `SolvePipeline::run_with_clock`.
-- Added final residual certification for `ConstraintSystem` so nonzero
-  post-solve residuals produce `DiagnosticIssue::UnsatisfiedConstraints`
-  instead of reporting `SystemStatus::Solved`.
-- Added regression tests for deterministic zero-clock duration and impossible
-  fixed-parameter residual certification.
+**2026-07-15 — code-quality and API-design overhaul** (from
+`docs/notes/2026-07-15-code-quality-review.md`; all eight review work items done):
+
+- Deleted the superseded `graph` clustering layer (`RigidCluster`, `decompose_clusters`,
+  `ConstraintGraph`) and every `#[allow(dead_code)]`; the workspace now builds and lints
+  clean: `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes,
+  `#![warn(missing_docs)]` is on with zero gaps, and CI gates fmt + clippy.
+- Failure diagnostics are preserved end-to-end: `OptimizationStatus::LineSearchFailed`
+  carries the `LineSearchFailure` (reason + eval counts), JIT fallback is reportable via
+  `JITSolver::last_jit_fallback()`, sparse factorization failures return
+  `SolveError::LinearSolveFailed { details }`, and `optimize()` without an objective is
+  `UnsupportedProblemStructure`, not `Infeasible`. `JITConfig`'s force flags became a
+  `JitMode` enum.
+- The two solver families converged: optimization solvers are instance-based
+  (`BfgsSolver::new(config).solve(objective, store)`), accept a host `SolveClock`
+  (`optimize_with_clock`), and share the result vocabulary (`SystemResult::iterations`,
+  `OptimizationResult::{is_converged, iterations}` accessors). `OptimizationConfig` is
+  split into `line_search`/`alm`/`trust_region` sub-configs with `validate()`.
+- Shared solver plumbing extracted (`solver/common.rs`): one validation preamble, one
+  finiteness guard, one `SolverChoice` dispatch; `Problem::is_square()` added.
+- Geometry API error contract: `Sketch2DBuilder` uses typed `PointHandle` /
+  `LineHandle` / `CircleHandle` with `Result<_, BuilderError>`; `remove_entity` /
+  `remove_constraint` return `RemovalError` (refusing removal with dependent constraints
+  or shared params) instead of silently no-opping; a debug integrity sweep runs before
+  every solve.
+- Default features slimmed to `std` + `macros`; publish metadata added; stale docs fixed.
+
+**2026-07-10 — P0 correctness campaign** (see `docs/notes/2026-07-10-independent-review.md`):
+decomposition cascading with global residual certification, coherent objective/Hessian
+model, bound-aware L-BFGS-B line search, full ALM KKT checks, explicit line-search
+failure reporting, and host-provided solve timing (`SolveClock`).
 
 ## Codebase
 
@@ -28,8 +51,9 @@ Solverang is a domain-agnostic numerical solver for nonlinear systems and least-
 | Integration tests (`crates/solverang/tests/`) | 17 | ~12,600 |
 | Benchmarks (`crates/solverang/benches/`) | 3 | ~1,300 |
 
-Targeted constraint-system tests pass. The current crate still has existing
-compiler warnings in unrelated modules/tests.
+The full workspace test suite passes with `--all-features`, with default features,
+and with `--no-default-features --features std`; the workspace is clippy- and
+rustfmt-clean with warnings denied.
 
 ## Module Map
 
@@ -83,10 +107,10 @@ compiler warnings in unrelated modules/tests.
 |------|---------|---------|
 | `std` | yes | Standard library support |
 | `macros` | yes | `#[auto_jacobian]` procedural macro |
-| `sparse` | yes | Sparse matrix support via faer |
-| `parallel` | yes | Parallel solving via rayon |
-| `jit` | yes | Cranelift JIT compilation |
-| `nist` | yes | NIST StRD regression test problems |
+| `sparse` | no | Sparse matrix support via faer |
+| `parallel` | no | Parallel solving via rayon |
+| `jit` | no | Cranelift JIT compilation |
+| `nist` | no | NIST StRD regression test problems |
 
 ## Test Suite
 
@@ -133,6 +157,10 @@ compiler warnings in unrelated modules/tests.
 - `docs/plans/testing/` -- 11 testing strategy documents
 - `docs/plans/jit/` -- Three-level JIT implementation plan
 - `docs/notes/` -- Research notes on solvers, JIT, differential dataflow, SOTA survey
+- `docs/notes/parasolid-kernel-lessons.md` -- production-hardening lessons distilled from
+  reverse-engineering Parasolid's numeric core (noise-gating, role-aware linear/angular
+  tolerances, damped-Newton-Cramer micro-cluster path, determinism contract, and the
+  solver↔kernel evaluation seam for sitting on top of cadabra2)
 - `TESTING_STRATEGY.md` -- Comprehensive testing strategy overview
 - `lib.rs` -- Crate-level docs with runnable examples
 

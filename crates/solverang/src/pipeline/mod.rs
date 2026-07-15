@@ -8,7 +8,7 @@
 //!
 //! The [`SolvePipeline`] struct orchestrates the full pipeline, caching
 //! decomposition results and supporting incremental re-solves via the
-//! [`ChangeTracker`].
+//! crate-internal `ChangeTracker`.
 
 pub mod analyze;
 pub mod decompose;
@@ -143,6 +143,7 @@ impl SolvePipeline {
     }
 
     /// Run the full pipeline using a host-provided clock for duration reporting.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_with_clock(
         &mut self,
         constraints: &[Option<Box<dyn Constraint>>],
@@ -213,7 +214,7 @@ impl SolvePipeline {
         // -----------------------------------------------------------------
         let mut latest_results: HashMap<ClusterId, ClusterResult> = HashMap::new();
         let mut latest_diagnostics: HashMap<ClusterId, Vec<DiagnosticIssue>> = HashMap::new();
-        let mut total_iterations = 0usize;
+        let mut iterations = 0usize;
 
         let max_passes = self.cached_clusters.len().max(1);
         for _pass in 0..max_passes {
@@ -227,8 +228,11 @@ impl SolvePipeline {
 
                 // Snapshot this cluster's parameter values so downstream
                 // dependents can be marked dirty if the solve changes them.
-                let before: Vec<f64> =
-                    cluster.param_ids.iter().map(|&pid| store.get(pid)).collect();
+                let before: Vec<f64> = cluster
+                    .param_ids
+                    .iter()
+                    .map(|&pid| store.get(pid))
+                    .collect();
 
                 // Phase 2: Analyze (immutable borrow of store).
                 let analysis = self.analyze.analyze(cluster, constraints, entities, store);
@@ -280,7 +284,7 @@ impl SolvePipeline {
                 let result = self
                     .post_process
                     .post_process(&solution, &analysis, cluster);
-                total_iterations += result.iterations;
+                iterations += result.iterations;
                 latest_results.insert(cluster.id, result);
 
                 // Collect diagnostics from analysis (latest solve wins).
@@ -358,7 +362,7 @@ impl SolvePipeline {
         SystemResult {
             status,
             clusters: cluster_results,
-            total_iterations,
+            iterations,
             duration: clock.elapsed(&start),
         }
     }
@@ -375,8 +379,8 @@ impl SolvePipeline {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use solverang::pipeline::{PipelineBuilder, SolvePipeline};
+/// ```
+/// use solverang::pipeline::PipelineBuilder;
 /// use solverang::pipeline::analyze::NoopAnalyze;
 ///
 /// let pipeline = PipelineBuilder::new()
@@ -743,7 +747,7 @@ mod tests {
         assert!(matches!(result2.status, SystemStatus::Solved));
         assert_eq!(result2.clusters.len(), 1);
         assert_eq!(result2.clusters[0].status, ClusterSolveStatus::Skipped);
-        assert_eq!(result2.total_iterations, 0);
+        assert_eq!(result2.iterations, 0);
     }
 
     #[test]
@@ -893,7 +897,7 @@ mod tests {
 
         assert!(matches!(result.status, SystemStatus::Solved));
         assert_eq!(result.clusters.len(), 0);
-        assert_eq!(result.total_iterations, 0);
+        assert_eq!(result.iterations, 0);
     }
 
     // -----------------------------------------------------------------------

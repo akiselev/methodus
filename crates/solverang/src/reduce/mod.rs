@@ -19,7 +19,3 @@
 pub mod eliminate;
 pub mod merge;
 pub mod substitute;
-
-pub use eliminate::{apply_eliminations, detect_trivial_eliminations, TrivialElimination};
-pub use merge::{build_substitution_map, detect_merges, MergeResult, ParamMerge};
-pub use substitute::{analyze_substitutions, is_trivially_satisfied, SubstitutionResult};

@@ -42,6 +42,85 @@ struct EntityInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Typed handles and errors
+// ---------------------------------------------------------------------------
+
+/// Handle to a point created by [`Sketch2DBuilder::add_point`].
+///
+/// Handles are typed so that constraint methods reject the wrong entity kind
+/// at compile time; a `PointHandle` can only come from this builder's
+/// point-creating methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PointHandle(EntityId);
+
+/// Handle to a line segment created by [`Sketch2DBuilder::add_line_segment`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LineHandle(EntityId);
+
+/// Handle to a circle created by [`Sketch2DBuilder::add_circle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CircleHandle(EntityId);
+
+impl PointHandle {
+    /// The underlying entity ID.
+    pub fn entity_id(self) -> EntityId {
+        self.0
+    }
+}
+
+impl LineHandle {
+    /// The underlying entity ID.
+    pub fn entity_id(self) -> EntityId {
+        self.0
+    }
+}
+
+impl CircleHandle {
+    /// The underlying entity ID.
+    pub fn entity_id(self) -> EntityId {
+        self.0
+    }
+}
+
+impl From<PointHandle> for EntityId {
+    fn from(h: PointHandle) -> Self {
+        h.0
+    }
+}
+
+impl From<LineHandle> for EntityId {
+    fn from(h: LineHandle) -> Self {
+        h.0
+    }
+}
+
+impl From<CircleHandle> for EntityId {
+    fn from(h: CircleHandle) -> Self {
+        h.0
+    }
+}
+
+/// Error from a [`Sketch2DBuilder`] operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuilderError {
+    /// The handle does not belong to this builder (e.g. it was created by a
+    /// different builder instance).
+    UnknownEntity(EntityId),
+}
+
+impl std::fmt::Display for BuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownEntity(id) => {
+                write!(f, "entity {id:?} was not created by this builder")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BuilderError {}
+
+// ---------------------------------------------------------------------------
 // Sketch2DBuilder
 // ---------------------------------------------------------------------------
 
@@ -49,15 +128,20 @@ struct EntityInfo {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use solverang::sketch2d::Sketch2DBuilder;
+/// use solverang::system::SystemStatus;
+///
 /// let mut b = Sketch2DBuilder::new();
 /// let p0 = b.add_fixed_point(0.0, 0.0);
-/// let p1 = b.add_point(10.0, 0.0);
-/// let p2 = b.add_point(5.0, 8.0);
-/// b.constrain_distance(p0, p1, 10.0);
-/// b.constrain_distance(p1, p2, 8.0);
-/// b.constrain_distance(p2, p0, 6.0);
-/// let system = b.build();
+/// let p1 = b.add_fixed_point(10.0, 0.0);
+/// let p2 = b.add_point(5.0, 1.0);
+/// b.constrain_distance(p0, p1, 10.0).unwrap();
+/// b.constrain_distance(p1, p2, 8.0).unwrap();
+/// b.constrain_distance(p2, p0, 6.0).unwrap();
+/// let mut system = b.build();
+/// let result = system.solve();
+/// assert!(matches!(result.status, SystemStatus::Solved));
 /// ```
 pub struct Sketch2DBuilder {
     system: ConstraintSystem,
@@ -91,24 +175,27 @@ impl Sketch2DBuilder {
 
     // -- Entity info lookup helpers --
 
-    fn point_params(&self, entity: EntityId) -> (ParamId, ParamId) {
-        match &self.entity_info[&entity].kind {
-            EntityKind::Point { x, y } => (*x, *y),
-            _ => panic!("Entity {:?} is not a Point2D", entity),
+    fn point_params(&self, h: PointHandle) -> Result<(ParamId, ParamId), BuilderError> {
+        match self.entity_info.get(&h.0).map(|i| &i.kind) {
+            Some(EntityKind::Point { x, y }) => Ok((*x, *y)),
+            _ => Err(BuilderError::UnknownEntity(h.0)),
         }
     }
 
-    fn line_params(&self, entity: EntityId) -> (ParamId, ParamId, ParamId, ParamId) {
-        match &self.entity_info[&entity].kind {
-            EntityKind::LineSegment { x1, y1, x2, y2 } => (*x1, *y1, *x2, *y2),
-            _ => panic!("Entity {:?} is not a LineSegment2D", entity),
+    fn line_params(
+        &self,
+        h: LineHandle,
+    ) -> Result<(ParamId, ParamId, ParamId, ParamId), BuilderError> {
+        match self.entity_info.get(&h.0).map(|i| &i.kind) {
+            Some(EntityKind::LineSegment { x1, y1, x2, y2 }) => Ok((*x1, *y1, *x2, *y2)),
+            _ => Err(BuilderError::UnknownEntity(h.0)),
         }
     }
 
-    fn circle_params(&self, entity: EntityId) -> (ParamId, ParamId, ParamId) {
-        match &self.entity_info[&entity].kind {
-            EntityKind::Circle { cx, cy, r } => (*cx, *cy, *r),
-            _ => panic!("Entity {:?} is not a Circle2D", entity),
+    fn circle_params(&self, h: CircleHandle) -> Result<(ParamId, ParamId, ParamId), BuilderError> {
+        match self.entity_info.get(&h.0).map(|i| &i.kind) {
+            Some(EntityKind::Circle { cx, cy, r }) => Ok((*cx, *cy, *r)),
+            _ => Err(BuilderError::UnknownEntity(h.0)),
         }
     }
 
@@ -117,7 +204,7 @@ impl Sketch2DBuilder {
     // ======================================================================
 
     /// Add a 2D point with the given initial position.
-    pub fn add_point(&mut self, x: f64, y: f64) -> EntityId {
+    pub fn add_point(&mut self, x: f64, y: f64) -> PointHandle {
         let eid = self.alloc_entity_id();
         let px = self.system.params_mut().alloc(x, eid);
         let py = self.system.params_mut().alloc(y, eid);
@@ -130,18 +217,19 @@ impl Sketch2DBuilder {
                 params: vec![px, py],
             },
         );
-        eid
+        PointHandle(eid)
     }
 
     /// Add a 2D point and immediately fix it (exclude from solving).
-    pub fn add_fixed_point(&mut self, x: f64, y: f64) -> EntityId {
-        let eid = self.add_point(x, y);
-        self.fix_entity(eid);
-        eid
+    pub fn add_fixed_point(&mut self, x: f64, y: f64) -> PointHandle {
+        let h = self.add_point(x, y);
+        self.fix_entity(h)
+            .expect("fix_entity: handle was just created");
+        h
     }
 
     /// Add a circle with the given center and radius.
-    pub fn add_circle(&mut self, cx: f64, cy: f64, r: f64) -> EntityId {
+    pub fn add_circle(&mut self, cx: f64, cy: f64, r: f64) -> CircleHandle {
         let eid = self.alloc_entity_id();
         let pcx = self.system.params_mut().alloc(cx, eid);
         let pcy = self.system.params_mut().alloc(cy, eid);
@@ -159,16 +247,20 @@ impl Sketch2DBuilder {
                 params: vec![pcx, pcy, pr],
             },
         );
-        eid
+        CircleHandle(eid)
     }
 
     /// Add a line segment between two existing points.
     ///
     /// The line segment shares parameter IDs with the two endpoint points,
     /// so moving a point automatically moves the line endpoint.
-    pub fn add_line_segment(&mut self, p1: EntityId, p2: EntityId) -> EntityId {
-        let (x1, y1) = self.point_params(p1);
-        let (x2, y2) = self.point_params(p2);
+    pub fn add_line_segment(
+        &mut self,
+        p1: PointHandle,
+        p2: PointHandle,
+    ) -> Result<LineHandle, BuilderError> {
+        let (x1, y1) = self.point_params(p1)?;
+        let (x2, y2) = self.point_params(p2)?;
         let eid = self.alloc_entity_id();
         let entity = LineSegment2D::new(eid, x1, y1, x2, y2);
         self.system.add_entity(Box::new(entity));
@@ -179,197 +271,242 @@ impl Sketch2DBuilder {
                 params: vec![x1, y1, x2, y2],
             },
         );
-        eid
+        Ok(LineHandle(eid))
     }
 
     // ======================================================================
     // Constraint creation
     // ======================================================================
 
-    /// Constrain the distance between two point entities.
+    /// Constrain the distance between two points.
     pub fn constrain_distance(
         &mut self,
-        e1: EntityId,
-        e2: EntityId,
+        e1: PointHandle,
+        e2: PointHandle,
         distance: f64,
-    ) -> ConstraintId {
-        let (x1, y1) = self.point_params(e1);
-        let (x2, y2) = self.point_params(e2);
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1) = self.point_params(e1)?;
+        let (x2, y2) = self.point_params(e2)?;
         let cid = self.alloc_constraint_id();
-        let c = DistancePtPt::new(cid, e1, e2, x1, y1, x2, y2, distance);
+        let c = DistancePtPt::new(cid, e1.0, e2.0, x1, y1, x2, y2, distance);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Constrain two point entities to be coincident.
-    pub fn constrain_coincident(&mut self, e1: EntityId, e2: EntityId) -> ConstraintId {
-        let (x1, y1) = self.point_params(e1);
-        let (x2, y2) = self.point_params(e2);
+    /// Constrain two points to be coincident.
+    pub fn constrain_coincident(
+        &mut self,
+        e1: PointHandle,
+        e2: PointHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1) = self.point_params(e1)?;
+        let (x2, y2) = self.point_params(e2)?;
         let cid = self.alloc_constraint_id();
-        let c = Coincident::new(cid, e1, e2, x1, y1, x2, y2);
+        let c = Coincident::new(cid, e1.0, e2.0, x1, y1, x2, y2);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Constrain two point entities to share the same y-coordinate (horizontal).
-    pub fn constrain_horizontal(&mut self, e1: EntityId, e2: EntityId) -> ConstraintId {
-        let (_, y1) = self.point_params(e1);
-        let (_, y2) = self.point_params(e2);
+    /// Constrain two points to share the same y-coordinate (horizontal).
+    pub fn constrain_horizontal(
+        &mut self,
+        e1: PointHandle,
+        e2: PointHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (_, y1) = self.point_params(e1)?;
+        let (_, y2) = self.point_params(e2)?;
         let cid = self.alloc_constraint_id();
-        let c = Horizontal::new(cid, e1, e2, y1, y2);
+        let c = Horizontal::new(cid, e1.0, e2.0, y1, y2);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Constrain two point entities to share the same x-coordinate (vertical).
-    pub fn constrain_vertical(&mut self, e1: EntityId, e2: EntityId) -> ConstraintId {
-        let (x1, _) = self.point_params(e1);
-        let (x2, _) = self.point_params(e2);
+    /// Constrain two points to share the same x-coordinate (vertical).
+    pub fn constrain_vertical(
+        &mut self,
+        e1: PointHandle,
+        e2: PointHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, _) = self.point_params(e1)?;
+        let (x2, _) = self.point_params(e2)?;
         let cid = self.alloc_constraint_id();
-        let c = Vertical::new(cid, e1, e2, x1, x2);
+        let c = Vertical::new(cid, e1.0, e2.0, x1, x2);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Fix a point entity at specific coordinates.
-    pub fn constrain_fixed(&mut self, entity: EntityId, x: f64, y: f64) -> ConstraintId {
-        let (px, py) = self.point_params(entity);
+    /// Fix a point at specific coordinates.
+    pub fn constrain_fixed(
+        &mut self,
+        entity: PointHandle,
+        x: f64,
+        y: f64,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (px, py) = self.point_params(entity)?;
         let cid = self.alloc_constraint_id();
-        let c = Fixed::new(cid, entity, px, py, x, y);
+        let c = Fixed::new(cid, entity.0, px, py, x, y);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain two line segments to be parallel.
-    pub fn constrain_parallel(&mut self, l1: EntityId, l2: EntityId) -> ConstraintId {
-        let (x1, y1, x2, y2) = self.line_params(l1);
-        let (x3, y3, x4, y4) = self.line_params(l2);
+    pub fn constrain_parallel(
+        &mut self,
+        l1: LineHandle,
+        l2: LineHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1, x2, y2) = self.line_params(l1)?;
+        let (x3, y3, x4, y4) = self.line_params(l2)?;
         let cid = self.alloc_constraint_id();
-        let c = Parallel::new(cid, l1, l2, x1, y1, x2, y2, x3, y3, x4, y4);
+        let c = Parallel::new(cid, l1.0, l2.0, x1, y1, x2, y2, x3, y3, x4, y4);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain two line segments to be perpendicular.
-    pub fn constrain_perpendicular(&mut self, l1: EntityId, l2: EntityId) -> ConstraintId {
-        let (x1, y1, x2, y2) = self.line_params(l1);
-        let (x3, y3, x4, y4) = self.line_params(l2);
+    pub fn constrain_perpendicular(
+        &mut self,
+        l1: LineHandle,
+        l2: LineHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1, x2, y2) = self.line_params(l1)?;
+        let (x3, y3, x4, y4) = self.line_params(l2)?;
         let cid = self.alloc_constraint_id();
-        let c = Perpendicular::new(cid, l1, l2, x1, y1, x2, y2, x3, y3, x4, y4);
+        let c = Perpendicular::new(cid, l1.0, l2.0, x1, y1, x2, y2, x3, y3, x4, y4);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain a line segment to be tangent to a circle.
     pub fn constrain_tangent_line_circle(
         &mut self,
-        line: EntityId,
-        circle: EntityId,
-    ) -> ConstraintId {
-        let (x1, y1, x2, y2) = self.line_params(line);
-        let (cx, cy, r) = self.circle_params(circle);
+        line: LineHandle,
+        circle: CircleHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1, x2, y2) = self.line_params(line)?;
+        let (cx, cy, r) = self.circle_params(circle)?;
         let cid = self.alloc_constraint_id();
-        let c = TangentLineCircle::new(cid, line, circle, x1, y1, x2, y2, cx, cy, r);
+        let c = TangentLineCircle::new(cid, line.0, circle.0, x1, y1, x2, y2, cx, cy, r);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Constrain a point entity to lie on a circle entity.
-    pub fn constrain_point_on_circle(&mut self, point: EntityId, circle: EntityId) -> ConstraintId {
-        let (px, py) = self.point_params(point);
-        let (cx, cy, r) = self.circle_params(circle);
+    /// Constrain a point to lie on a circle.
+    pub fn constrain_point_on_circle(
+        &mut self,
+        point: PointHandle,
+        circle: CircleHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (px, py) = self.point_params(point)?;
+        let (cx, cy, r) = self.circle_params(circle)?;
         let cid = self.alloc_constraint_id();
-        let c = PointOnCircle::new(cid, point, circle, px, py, cx, cy, r);
+        let c = PointOnCircle::new(cid, point.0, circle.0, px, py, cx, cy, r);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain two line segments to have equal length.
-    pub fn constrain_equal_length(&mut self, l1: EntityId, l2: EntityId) -> ConstraintId {
-        let (x1, y1, x2, y2) = self.line_params(l1);
-        let (x3, y3, x4, y4) = self.line_params(l2);
+    pub fn constrain_equal_length(
+        &mut self,
+        l1: LineHandle,
+        l2: LineHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1, x2, y2) = self.line_params(l1)?;
+        let (x3, y3, x4, y4) = self.line_params(l2)?;
         let cid = self.alloc_constraint_id();
-        let c = EqualLength::new(cid, l1, l2, x1, y1, x2, y2, x3, y3, x4, y4);
+        let c = EqualLength::new(cid, l1.0, l2.0, x1, y1, x2, y2, x3, y3, x4, y4);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Constrain a point entity to be at the midpoint of a line segment entity.
-    pub fn constrain_midpoint(&mut self, point: EntityId, line: EntityId) -> ConstraintId {
-        let (mx, my) = self.point_params(point);
-        let (x1, y1, x2, y2) = self.line_params(line);
+    /// Constrain a point to be at the midpoint of a line segment.
+    pub fn constrain_midpoint(
+        &mut self,
+        point: PointHandle,
+        line: LineHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (mx, my) = self.point_params(point)?;
+        let (x1, y1, x2, y2) = self.line_params(line)?;
         let cid = self.alloc_constraint_id();
-        let c = Midpoint::new(cid, point, line, mx, my, x1, y1, x2, y2);
+        let c = Midpoint::new(cid, point.0, line.0, mx, my, x1, y1, x2, y2);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain two points to be symmetric about a center point.
     pub fn constrain_symmetric(
         &mut self,
-        p1: EntityId,
-        p2: EntityId,
-        center: EntityId,
-    ) -> ConstraintId {
-        let (x1, y1) = self.point_params(p1);
-        let (x2, y2) = self.point_params(p2);
-        let (cx, cy) = self.point_params(center);
+        p1: PointHandle,
+        p2: PointHandle,
+        center: PointHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1) = self.point_params(p1)?;
+        let (x2, y2) = self.point_params(p2)?;
+        let (cx, cy) = self.point_params(center)?;
         let cid = self.alloc_constraint_id();
-        let c = Symmetric::new(cid, p1, p2, center, x1, y1, x2, y2, cx, cy);
+        let c = Symmetric::new(cid, p1.0, p2.0, center.0, x1, y1, x2, y2, cx, cy);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain two circles to share the same center (concentric).
     ///
     /// Reuses `Coincident` on the center parameters of each circle.
-    pub fn constrain_concentric(&mut self, c1: EntityId, c2: EntityId) -> ConstraintId {
-        let (cx1, cy1, _) = self.circle_params(c1);
-        let (cx2, cy2, _) = self.circle_params(c2);
+    pub fn constrain_concentric(
+        &mut self,
+        c1: CircleHandle,
+        c2: CircleHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (cx1, cy1, _) = self.circle_params(c1)?;
+        let (cx2, cy2, _) = self.circle_params(c2)?;
         let cid = self.alloc_constraint_id();
-        let c = Coincident::new(cid, c1, c2, cx1, cy1, cx2, cy2);
+        let c = Coincident::new(cid, c1.0, c2.0, cx1, cy1, cx2, cy2);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain two circles to be externally tangent (center distance = r1 + r2).
     pub fn constrain_tangent_circle_circle(
         &mut self,
-        c1: EntityId,
-        c2: EntityId,
-    ) -> ConstraintId {
-        let (cx1, cy1, r1) = self.circle_params(c1);
-        let (cx2, cy2, r2) = self.circle_params(c2);
+        c1: CircleHandle,
+        c2: CircleHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (cx1, cy1, r1) = self.circle_params(c1)?;
+        let (cx2, cy2, r2) = self.circle_params(c2)?;
         let cid = self.alloc_constraint_id();
-        let c = TangentCircleCircle::external(cid, c1, c2, cx1, cy1, r1, cx2, cy2, r2);
+        let c = TangentCircleCircle::external(cid, c1.0, c2.0, cx1, cy1, r1, cx2, cy2, r2);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Constrain three point entities to be collinear.
+    /// Constrain three points to be collinear.
     pub fn constrain_collinear(
         &mut self,
-        p1: EntityId,
-        p2: EntityId,
-        p3: EntityId,
-    ) -> ConstraintId {
-        let (x1, y1) = self.point_params(p1);
-        let (x2, y2) = self.point_params(p2);
-        let (x3, y3) = self.point_params(p3);
+        p1: PointHandle,
+        p2: PointHandle,
+        p3: PointHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (x1, y1) = self.point_params(p1)?;
+        let (x2, y2) = self.point_params(p2)?;
+        let (x3, y3) = self.point_params(p3)?;
         let cid = self.alloc_constraint_id();
-        let c = Collinear::new(cid, p1, x1, y1, p2, x2, y2, p3, x3, y3);
+        let c = Collinear::new(cid, p1.0, x1, y1, p2.0, x2, y2, p3.0, x3, y3);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
-    /// Constrain two circle entities to have equal radii.
-    pub fn constrain_equal_radius(&mut self, c1: EntityId, c2: EntityId) -> ConstraintId {
-        let (_, _, r1) = self.circle_params(c1);
-        let (_, _, r2) = self.circle_params(c2);
+    /// Constrain two circles to have equal radii.
+    pub fn constrain_equal_radius(
+        &mut self,
+        c1: CircleHandle,
+        c2: CircleHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (_, _, r1) = self.circle_params(c1)?;
+        let (_, _, r2) = self.circle_params(c2)?;
         let cid = self.alloc_constraint_id();
-        let c = EqualRadius::new(cid, c1, r1, c2, r2);
+        let c = EqualRadius::new(cid, c1.0, r1, c2.0, r2);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     /// Constrain two point entities to be mirror-symmetric about a line entity.
@@ -380,17 +517,18 @@ impl Sketch2DBuilder {
     /// - The segment P1P2 is perpendicular to AB.
     pub fn constrain_symmetric_about_line(
         &mut self,
-        p1: EntityId,
-        p2: EntityId,
-        line: EntityId,
-    ) -> ConstraintId {
-        let (p1x, p1y) = self.point_params(p1);
-        let (p2x, p2y) = self.point_params(p2);
-        let (ax, ay, bx, by) = self.line_params(line);
+        p1: PointHandle,
+        p2: PointHandle,
+        line: LineHandle,
+    ) -> Result<ConstraintId, BuilderError> {
+        let (p1x, p1y) = self.point_params(p1)?;
+        let (p2x, p2y) = self.point_params(p2)?;
+        let (ax, ay, bx, by) = self.line_params(line)?;
         let cid = self.alloc_constraint_id();
-        let c = SymmetricAboutLine::new(cid, p1, p2, line, p1x, p1y, p2x, p2y, ax, ay, bx, by);
+        let c =
+            SymmetricAboutLine::new(cid, p1.0, p2.0, line.0, p1x, p1y, p2x, p2y, ax, ay, bx, by);
         self.system.add_constraint(Box::new(c));
-        cid
+        Ok(cid)
     }
 
     // ======================================================================
@@ -403,14 +541,19 @@ impl Sketch2DBuilder {
     }
 
     /// Fix all parameters of an entity (exclude from solving).
-    pub fn fix_entity(&mut self, entity: EntityId) {
+    ///
+    /// Accepts any handle type ([`PointHandle`], [`LineHandle`],
+    /// [`CircleHandle`]) or a raw [`EntityId`].
+    pub fn fix_entity(&mut self, entity: impl Into<EntityId>) -> Result<(), BuilderError> {
+        let id = entity.into();
         let info = self
             .entity_info
-            .get(&entity)
-            .expect("fix_entity: unknown EntityId");
-        for &pid in &info.params {
+            .get(&id)
+            .ok_or(BuilderError::UnknownEntity(id))?;
+        for &pid in &info.params.clone() {
             self.system.params_mut().fix(pid);
         }
+        Ok(())
     }
 
     // ======================================================================
@@ -432,9 +575,18 @@ impl Sketch2DBuilder {
         &mut self.system
     }
 
-    /// Look up the entity info for an entity added through this builder.
-    pub fn entity_param_ids(&self, entity: EntityId) -> &[ParamId] {
-        &self.entity_info[&entity].params
+    /// Look up the parameter IDs of an entity added through this builder.
+    ///
+    /// Accepts any handle type or a raw [`EntityId`].
+    pub fn entity_param_ids(
+        &self,
+        entity: impl Into<EntityId>,
+    ) -> Result<&[ParamId], BuilderError> {
+        let id = entity.into();
+        self.entity_info
+            .get(&id)
+            .map(|i| i.params.as_slice())
+            .ok_or(BuilderError::UnknownEntity(id))
     }
 }
 
@@ -461,7 +613,7 @@ mod tests {
         let ids: Vec<ParamId> = sys.params().alive_param_ids().collect();
         assert_eq!(ids.len(), 2);
         // The entity id should be valid
-        assert_eq!(p.raw_index(), 0);
+        assert_eq!(p.entity_id().raw_index(), 0);
     }
 
     #[test]
@@ -487,7 +639,7 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let p0 = b.add_point(0.0, 0.0);
         let p1 = b.add_point(10.0, 0.0);
-        let _l = b.add_line_segment(p0, p1);
+        let _l = b.add_line_segment(p0, p1).unwrap();
 
         let sys = b.build();
         assert_eq!(sys.entity_count(), 3); // 2 points + 1 line
@@ -500,7 +652,7 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let p0 = b.add_point(0.0, 0.0);
         let p1 = b.add_point(3.0, 4.0);
-        let _c = b.constrain_distance(p0, p1, 5.0);
+        let _c = b.constrain_distance(p0, p1, 5.0).unwrap();
 
         let sys = b.build();
         assert_eq!(sys.constraint_count(), 1);
@@ -515,7 +667,7 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let p0 = b.add_point(3.0, 4.0);
         let p1 = b.add_point(3.0, 4.0);
-        let _c = b.constrain_coincident(p0, p1);
+        let _c = b.constrain_coincident(p0, p1).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -528,7 +680,7 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let p0 = b.add_point(0.0, 5.0);
         let p1 = b.add_point(10.0, 5.0);
-        let _c = b.constrain_horizontal(p0, p1);
+        let _c = b.constrain_horizontal(p0, p1).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -540,7 +692,7 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let p0 = b.add_point(5.0, 0.0);
         let p1 = b.add_point(5.0, 10.0);
-        let _c = b.constrain_vertical(p0, p1);
+        let _c = b.constrain_vertical(p0, p1).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -551,7 +703,7 @@ mod tests {
     fn test_builder_constrain_fixed() {
         let mut b = Sketch2DBuilder::new();
         let p = b.add_point(3.0, 4.0);
-        let _c = b.constrain_fixed(p, 3.0, 4.0);
+        let _c = b.constrain_fixed(p, 3.0, 4.0).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -566,9 +718,9 @@ mod tests {
         let p1 = b.add_point(1.0, 2.0);
         let p2 = b.add_point(3.0, 1.0);
         let p3 = b.add_point(5.0, 5.0); // dir = (2,4), parallel to (1,2)
-        let l1 = b.add_line_segment(p0, p1);
-        let l2 = b.add_line_segment(p2, p3);
-        let _c = b.constrain_parallel(l1, l2);
+        let l1 = b.add_line_segment(p0, p1).unwrap();
+        let l2 = b.add_line_segment(p2, p3).unwrap();
+        let _c = b.constrain_parallel(l1, l2).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -582,9 +734,9 @@ mod tests {
         let p1 = b.add_point(1.0, 0.0);
         let p2 = b.add_point(0.0, 0.0);
         let p3 = b.add_point(0.0, 1.0);
-        let l1 = b.add_line_segment(p0, p1);
-        let l2 = b.add_line_segment(p2, p3);
-        let _c = b.constrain_perpendicular(l1, l2);
+        let l1 = b.add_line_segment(p0, p1).unwrap();
+        let l2 = b.add_line_segment(p2, p3).unwrap();
+        let _c = b.constrain_perpendicular(l1, l2).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -596,7 +748,7 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let p = b.add_point(3.0, 4.0);
         let c = b.add_circle(0.0, 0.0, 5.0);
-        let _cid = b.constrain_point_on_circle(p, c);
+        let _cid = b.constrain_point_on_circle(p, c).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -610,9 +762,9 @@ mod tests {
         let p1 = b.add_point(3.0, 4.0); // length 5
         let p2 = b.add_point(1.0, 1.0);
         let p3 = b.add_point(4.0, 5.0); // length 5
-        let l1 = b.add_line_segment(p0, p1);
-        let l2 = b.add_line_segment(p2, p3);
-        let _c = b.constrain_equal_length(l1, l2);
+        let l1 = b.add_line_segment(p0, p1).unwrap();
+        let l2 = b.add_line_segment(p2, p3).unwrap();
+        let _c = b.constrain_equal_length(l1, l2).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -625,8 +777,8 @@ mod tests {
         let p0 = b.add_point(0.0, 0.0);
         let p1 = b.add_point(10.0, 6.0);
         let mid = b.add_point(5.0, 3.0);
-        let l = b.add_line_segment(p0, p1);
-        let _c = b.constrain_midpoint(mid, l);
+        let l = b.add_line_segment(p0, p1).unwrap();
+        let _c = b.constrain_midpoint(mid, l).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -640,7 +792,7 @@ mod tests {
         let p1 = b.add_point(1.0, 2.0);
         let p2 = b.add_point(5.0, 8.0);
         let center = b.add_point(3.0, 5.0);
-        let _c = b.constrain_symmetric(p1, p2, center);
+        let _c = b.constrain_symmetric(p1, p2, center).unwrap();
 
         let sys = b.build();
         let r = sys.compute_residuals();
@@ -652,7 +804,7 @@ mod tests {
     fn test_builder_fix_param() {
         let mut b = Sketch2DBuilder::new();
         let p = b.add_point(1.0, 2.0);
-        let params = b.entity_param_ids(p).to_vec();
+        let params = b.entity_param_ids(p).unwrap().to_vec();
         b.fix_param(params[0]);
 
         let sys = b.build();
@@ -664,7 +816,7 @@ mod tests {
     fn test_builder_fix_entity() {
         let mut b = Sketch2DBuilder::new();
         let p = b.add_point(1.0, 2.0);
-        b.fix_entity(p);
+        b.fix_entity(p).unwrap();
 
         let sys = b.build();
         assert_eq!(sys.params().free_param_count(), 0);
@@ -678,9 +830,9 @@ mod tests {
         let p1 = b.add_point(10.0, 0.0);
         let p2 = b.add_point(5.0, 1.0);
 
-        b.constrain_distance(p0, p1, 10.0);
-        b.constrain_distance(p1, p2, 8.0);
-        b.constrain_distance(p2, p0, 6.0);
+        b.constrain_distance(p0, p1, 10.0).unwrap();
+        b.constrain_distance(p1, p2, 8.0).unwrap();
+        b.constrain_distance(p2, p0, 6.0).unwrap();
 
         let sys = b.build();
         assert_eq!(sys.entity_count(), 3);
@@ -696,7 +848,7 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let p0 = b.add_fixed_point(0.0, 0.0);
         let p1 = b.add_point(3.0, 4.0);
-        b.constrain_distance(p0, p1, 5.0);
+        b.constrain_distance(p0, p1, 5.0).unwrap();
 
         let sys = b.build();
         assert_eq!(sys.equation_count(), 1);
@@ -717,10 +869,10 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let c1 = b.add_circle(3.0, 4.0, 2.0);
         let c2 = b.add_circle(7.0, 8.0, 5.0);
-        b.constrain_concentric(c1, c2);
+        b.constrain_concentric(c1, c2).unwrap();
 
-        let params1 = b.entity_param_ids(c1).to_vec(); // [cx1, cy1, r1]
-        let params2 = b.entity_param_ids(c2).to_vec(); // [cx2, cy2, r2]
+        let params1 = b.entity_param_ids(c1).unwrap().to_vec(); // [cx1, cy1, r1]
+        let params2 = b.entity_param_ids(c2).unwrap().to_vec(); // [cx2, cy2, r2]
         b.fix_param(params1[0]);
         b.fix_param(params1[1]);
         b.fix_param(params1[2]);
@@ -729,7 +881,10 @@ mod tests {
         let mut sys = b.build();
         let result = sys.solve();
         assert!(
-            matches!(result.status, SystemStatus::Solved | SystemStatus::PartiallySolved),
+            matches!(
+                result.status,
+                SystemStatus::Solved | SystemStatus::PartiallySolved
+            ),
             "solver did not converge"
         );
 
@@ -750,10 +905,10 @@ mod tests {
         // Place c2 at cy=7.0 (= r1+r2) so the squared-formulation residual starts
         // close to zero and the single-step scalar solver converges exactly.
         let c2 = b.add_circle(0.0, 7.0, 4.0);
-        b.constrain_tangent_circle_circle(c1, c2);
+        b.constrain_tangent_circle_circle(c1, c2).unwrap();
 
-        let p1 = b.entity_param_ids(c1).to_vec();
-        let p2 = b.entity_param_ids(c2).to_vec();
+        let p1 = b.entity_param_ids(c1).unwrap().to_vec();
+        let p2 = b.entity_param_ids(c2).unwrap().to_vec();
         b.fix_param(p1[0]);
         b.fix_param(p1[1]);
         b.fix_param(p1[2]);
@@ -763,7 +918,10 @@ mod tests {
         let mut sys = b.build();
         let result = sys.solve();
         assert!(
-            matches!(result.status, SystemStatus::Solved | SystemStatus::PartiallySolved),
+            matches!(
+                result.status,
+                SystemStatus::Solved | SystemStatus::PartiallySolved
+            ),
             "solver did not converge"
         );
 
@@ -792,19 +950,22 @@ mod tests {
         let p1 = b.add_fixed_point(0.0, 0.0);
         let p2 = b.add_fixed_point(10.0, 0.0);
         let p3 = b.add_point(5.0, 3.0); // off the x-axis
-        b.constrain_collinear(p1, p2, p3);
+        b.constrain_collinear(p1, p2, p3).unwrap();
 
         // Capture p1/p2/p3 param IDs before build.
-        let pp1 = b.entity_param_ids(p1).to_vec(); // [x1, y1]
-        let pp2 = b.entity_param_ids(p2).to_vec(); // [x2, y2]
-        let pp3 = b.entity_param_ids(p3).to_vec(); // [x3, y3]
-        // Fix x3 so p3 can only slide vertically onto the line.
+        let pp1 = b.entity_param_ids(p1).unwrap().to_vec(); // [x1, y1]
+        let pp2 = b.entity_param_ids(p2).unwrap().to_vec(); // [x2, y2]
+        let pp3 = b.entity_param_ids(p3).unwrap().to_vec(); // [x3, y3]
+                                                            // Fix x3 so p3 can only slide vertically onto the line.
         b.fix_param(pp3[0]);
 
         let mut sys = b.build();
         let result = sys.solve();
         assert!(
-            matches!(result.status, SystemStatus::Solved | SystemStatus::PartiallySolved),
+            matches!(
+                result.status,
+                SystemStatus::Solved | SystemStatus::PartiallySolved
+            ),
             "solver did not converge"
         );
 
@@ -827,10 +988,10 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let c1 = b.add_circle(0.0, 0.0, 5.0);
         let c2 = b.add_circle(10.0, 0.0, 3.0);
-        b.constrain_equal_radius(c1, c2);
+        b.constrain_equal_radius(c1, c2).unwrap();
 
-        let p1 = b.entity_param_ids(c1).to_vec();
-        let p2 = b.entity_param_ids(c2).to_vec();
+        let p1 = b.entity_param_ids(c1).unwrap().to_vec();
+        let p2 = b.entity_param_ids(c2).unwrap().to_vec();
         b.fix_param(p1[0]);
         b.fix_param(p1[1]);
         b.fix_param(p1[2]); // fix r1=5
@@ -840,13 +1001,21 @@ mod tests {
         let mut sys = b.build();
         let result = sys.solve();
         assert!(
-            matches!(result.status, SystemStatus::Solved | SystemStatus::PartiallySolved),
+            matches!(
+                result.status,
+                SystemStatus::Solved | SystemStatus::PartiallySolved
+            ),
             "solver did not converge"
         );
 
         let r1v = sys.params().get(p1[2]);
         let r2v = sys.params().get(p2[2]);
-        assert!((r1v - r2v).abs() < 1e-8, "radii mismatch: r1={}, r2={}", r1v, r2v);
+        assert!(
+            (r1v - r2v).abs() < 1e-8,
+            "radii mismatch: r1={}, r2={}",
+            r1v,
+            r2v
+        );
     }
 
     #[test]
@@ -856,19 +1025,22 @@ mod tests {
         let mut b = Sketch2DBuilder::new();
         let pa = b.add_fixed_point(0.0, 0.0); // line endpoint A
         let pb = b.add_fixed_point(1.0, 0.0); // line endpoint B (x-axis)
-        let line = b.add_line_segment(pa, pb);
+        let line = b.add_line_segment(pa, pb).unwrap();
         let p1 = b.add_fixed_point(3.0, 2.0);
         let p2 = b.add_point(3.0, 1.0); // wrong; should be (3, -2)
-        b.constrain_symmetric_about_line(p1, p2, line);
+        b.constrain_symmetric_about_line(p1, p2, line).unwrap();
 
-        let pp2 = b.entity_param_ids(p2).to_vec();
+        let pp2 = b.entity_param_ids(p2).unwrap().to_vec();
         // Fix x-coordinate of p2 so only y can move.
         b.fix_param(pp2[0]);
 
         let mut sys = b.build();
         let result = sys.solve();
         assert!(
-            matches!(result.status, SystemStatus::Solved | SystemStatus::PartiallySolved),
+            matches!(
+                result.status,
+                SystemStatus::Solved | SystemStatus::PartiallySolved
+            ),
             "solver did not converge"
         );
 
@@ -879,21 +1051,63 @@ mod tests {
     }
 
     #[test]
+    fn foreign_handle_is_rejected_not_panicking() {
+        let mut other = Sketch2DBuilder::new();
+        let foreign = other.add_point(0.0, 0.0);
+
+        let mut b = Sketch2DBuilder::new();
+        let local = b.add_point(1.0, 1.0);
+        // `foreign` was created by a different builder: same raw index space,
+        // but this builder has no entity_info entry for it... unless the IDs
+        // collide. Use a handle from a builder with MORE entities to guarantee
+        // an unknown ID.
+        let far = {
+            let mut big = Sketch2DBuilder::new();
+            for _ in 0..10 {
+                big.add_point(0.0, 0.0);
+            }
+            big.add_point(9.0, 9.0)
+        };
+        let err = b.constrain_distance(local, far, 1.0).unwrap_err();
+        assert!(matches!(err, BuilderError::UnknownEntity(_)));
+        // No constraint was added.
+        assert_eq!(b.system().constraint_count(), 0);
+        let _ = foreign;
+    }
+
+    #[test]
+    fn fix_entity_unknown_handle_errors() {
+        let far = {
+            let mut big = Sketch2DBuilder::new();
+            for _ in 0..10 {
+                big.add_point(0.0, 0.0);
+            }
+            big.add_point(9.0, 9.0)
+        };
+        let mut b = Sketch2DBuilder::new();
+        assert!(b.fix_entity(far).is_err());
+        assert!(b.entity_param_ids(far).is_err());
+    }
+
+    #[test]
     fn test_constrain_symmetric_about_vertical_line() {
         // Mirror line: y-axis (x=0), A=(0,0) to B=(0,1).
         // p1=(-4, 5) must reflect to p2=(4, 5).
         let mut b = Sketch2DBuilder::new();
         let pa = b.add_fixed_point(0.0, 0.0);
         let pb = b.add_fixed_point(0.0, 1.0);
-        let line = b.add_line_segment(pa, pb);
+        let line = b.add_line_segment(pa, pb).unwrap();
         let p1 = b.add_fixed_point(-4.0, 5.0);
         let p2 = b.add_point(1.0, 1.0); // wrong initial guess
-        b.constrain_symmetric_about_line(p1, p2, line);
+        b.constrain_symmetric_about_line(p1, p2, line).unwrap();
 
         let mut sys = b.build();
         let result = sys.solve();
         assert!(
-            matches!(result.status, SystemStatus::Solved | SystemStatus::PartiallySolved),
+            matches!(
+                result.status,
+                SystemStatus::Solved | SystemStatus::PartiallySolved
+            ),
             "solver did not converge"
         );
 

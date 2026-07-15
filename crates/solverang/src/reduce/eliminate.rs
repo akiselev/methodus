@@ -114,17 +114,6 @@ pub fn detect_trivial_eliminations(
     eliminations
 }
 
-/// Apply trivial eliminations to the parameter store.
-///
-/// For each elimination, sets the parameter to its determined value and marks
-/// it as fixed so it is excluded from future solves.
-pub fn apply_eliminations(eliminations: &[TrivialElimination], store: &mut ParamStore) {
-    for elim in eliminations {
-        store.set(elim.param, elim.determined_value);
-        store.fix(elim.param);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,24 +302,6 @@ mod tests {
         // J for b = -1.0
         // x_new = 0.0 - 5.0 / (-1.0) = 5.0
         assert!((elims[0].determined_value - 5.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn test_apply_eliminations() {
-        let mut store = ParamStore::new();
-        let p = store.alloc(0.0, dummy_owner());
-
-        let elim = TrivialElimination {
-            param: p,
-            determined_value: 42.0,
-            constraint_index: 0,
-        };
-
-        assert!(!store.is_fixed(p));
-        apply_eliminations(&[elim], &mut store);
-
-        assert!((store.get(p) - 42.0).abs() < 1e-15);
-        assert!(store.is_fixed(p));
     }
 
     #[test]

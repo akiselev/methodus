@@ -4,12 +4,17 @@ version = "0.1.0"
 edition = "2021"
 description = "Domain-agnostic numerical solver for nonlinear systems and least-squares problems"
 license = "Apache-2.0"
+repository = "https://github.com/akiselev/solverang"
+readme = "../../README.md"
+keywords = ["solver", "nonlinear", "least-squares", "constraints", "cad"]
+categories = ["mathematics", "science", "algorithms"]
+rust-version = "1.85"
 
 [lib]
 path = "src/lib.rs"
 
 [features]
-default = ["std", "macros", "jit", "nist", "sparse", "parallel"]
+default = ["std", "macros"]
 std = []
 parallel = ["rayon"]
 sparse = ["faer"]

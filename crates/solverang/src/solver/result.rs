@@ -92,12 +92,26 @@ impl SolveResult {
     }
 }
 
+impl From<SolveError> for SolveResult {
+    fn from(error: SolveError) -> Self {
+        SolveResult::Failed { error }
+    }
+}
+
 /// Errors that can occur during solving.
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum SolveError {
     /// The Jacobian matrix is singular and cannot be inverted.
     #[error("Jacobian matrix is singular")]
     SingularJacobian,
+
+    /// A sparse or dense linear solve failed; `details` records which
+    /// factorization failed and why.
+    #[error("linear solve failed: {details}")]
+    LinearSolveFailed {
+        /// Which factorization(s) failed and the underlying error text.
+        details: String,
+    },
 
     /// The problem has no equations to solve.
     #[error("problem has no equations (m = 0)")]

@@ -504,49 +504,6 @@ mod tests {
         }
     }
 
-    // --- Test constraint: distance from origin ---
-    // Residual: sqrt(x^2 + y^2) - target
-    // Jacobian: (x / d, y / d)
-
-    struct DistFromOriginConstraint {
-        id: ConstraintId,
-        entity: EntityId,
-        px: ParamId,
-        py: ParamId,
-        params: [ParamId; 2],
-        target: f64,
-    }
-
-    impl Constraint for DistFromOriginConstraint {
-        fn id(&self) -> ConstraintId {
-            self.id
-        }
-        fn name(&self) -> &str {
-            "Distance"
-        }
-        fn entity_ids(&self) -> &[EntityId] {
-            std::slice::from_ref(&self.entity)
-        }
-        fn param_ids(&self) -> &[ParamId] {
-            &self.params
-        }
-        fn equation_count(&self) -> usize {
-            1
-        }
-        fn residuals(&self, store: &ParamStore) -> Vec<f64> {
-            let x = store.get(self.px);
-            let y = store.get(self.py);
-            let d = (x * x + y * y).sqrt();
-            vec![d - self.target]
-        }
-        fn jacobian(&self, store: &ParamStore) -> Vec<(usize, ParamId, f64)> {
-            let x = store.get(self.px);
-            let y = store.get(self.py);
-            let d = (x * x + y * y).sqrt().max(1e-15);
-            vec![(0, self.px, x / d), (0, self.py, y / d)]
-        }
-    }
-
     #[test]
     fn test_solve_scalar_basic() {
         let eid = EntityId::new(0, 0);

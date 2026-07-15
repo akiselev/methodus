@@ -145,33 +145,8 @@ impl SparseSolver {
         let n = problem.variable_count();
         let m = problem.residual_count();
 
-        // Validate dimensions
-        if n == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoVariables,
-            };
-        }
-
-        if m == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoEquations,
-            };
-        }
-
-        if x0.len() != n {
-            return SolveResult::Failed {
-                error: SolveError::DimensionMismatch {
-                    expected: n,
-                    got: x0.len(),
-                },
-            };
-        }
-
-        // Check initial point for non-finite values
-        if x0.iter().any(|v| !v.is_finite()) {
-            return SolveResult::Failed {
-                error: SolveError::NonFiniteResiduals,
-            };
+        if let Err(error) = super::common::validate_problem(problem, x0) {
+            return error.into();
         }
 
         let mut x = x0.to_vec();
@@ -180,11 +155,8 @@ impl SparseSolver {
             // Compute residuals
             let residuals = problem.residuals(&x);
 
-            // Check for non-finite residuals
-            if residuals.iter().any(|r| !r.is_finite()) {
-                return SolveResult::Failed {
-                    error: SolveError::NonFiniteResiduals,
-                };
+            if let Err(error) = super::common::check_residuals_finite(&residuals) {
+                return error.into();
             }
 
             let norm: f64 = residuals.iter().map(|r| r * r).sum::<f64>().sqrt();
@@ -201,11 +173,8 @@ impl SparseSolver {
             // Compute Jacobian
             let jacobian_triplets = problem.jacobian(&x);
 
-            // Check for non-finite Jacobian entries
-            if jacobian_triplets.iter().any(|(_, _, v)| !v.is_finite()) {
-                return SolveResult::Failed {
-                    error: SolveError::NonFiniteJacobian,
-                };
+            if let Err(error) = super::common::check_jacobian_finite(&jacobian_triplets) {
+                return error.into();
             }
 
             // Build CSR matrix
@@ -229,10 +198,10 @@ impl SparseSolver {
             };
 
             let delta = match delta {
-                Some(d) => d,
-                None => {
+                Ok(d) => d,
+                Err(details) => {
                     return SolveResult::Failed {
-                        error: SolveError::SingularJacobian,
+                        error: SolveError::LinearSolveFailed { details },
                     };
                 }
             };
@@ -284,7 +253,7 @@ impl SparseSolver {
 
     /// Solve the linear system using sparse operations.
     #[cfg(feature = "sparse")]
-    fn solve_sparse(&self, csr: &CsrMatrix, rhs: &[f64]) -> Option<Vec<f64>> {
+    fn solve_sparse(&self, csr: &CsrMatrix, rhs: &[f64]) -> Result<Vec<f64>, String> {
         use faer::prelude::*;
         use faer::sparse::{SparseColMat, Triplet};
 
@@ -292,7 +261,7 @@ impl SparseSolver {
         let n = csr.ncols;
 
         if csr.is_empty() {
-            return None;
+            return Err("sparse solve: Jacobian has no non-zero entries".to_string());
         }
 
         // Convert CSR to faer's triplet format
@@ -308,7 +277,7 @@ impl SparseSolver {
         // Build faer sparse matrix (CSC format)
         let sparse_mat = match SparseColMat::<usize, f64>::try_new_from_triplets(m, n, &triplets) {
             Ok(mat) => mat,
-            Err(_) => return None,
+            Err(e) => return Err(format!("sparse matrix construction failed: {e:?}")),
         };
 
         // Use sparse QR for rectangular systems, sparse LU for square
@@ -323,11 +292,12 @@ impl SparseSolver {
                         }
                     }
                     lu.solve_in_place(result.as_mut());
-                    Some(result.iter().copied().collect())
+                    Ok(result.iter().copied().collect())
                 }
-                Err(_) => {
-                    // Fall back to QR
+                Err(lu_err) => {
+                    // Fall back to QR, keeping the LU failure in the context.
                     self.solve_sparse_qr(&sparse_mat, rhs, m, n)
+                        .map_err(|qr_err| format!("sparse LU failed ({lu_err:?}); {qr_err}"))
                 }
             }
         } else {
@@ -344,7 +314,7 @@ impl SparseSolver {
         rhs: &[f64],
         m: usize,
         n: usize,
-    ) -> Option<Vec<f64>> {
+    ) -> Result<Vec<f64>, String> {
         use faer::prelude::*;
 
         if m >= n {
@@ -363,25 +333,26 @@ impl SparseSolver {
                     qr.solve_lstsq_in_place(rhs_col.as_mut());
 
                     // Extract first n components
-                    Some(rhs_col.iter().take(n).copied().collect())
+                    Ok(rhs_col.iter().take(n).copied().collect())
                 }
-                Err(_) => None,
+                Err(e) => Err(format!("sparse QR factorization failed: {e:?}")),
             }
         } else {
-            // Underdetermined: use minimum norm solution via normal equations
-            // This is less common, fall back to dense
-            None
+            // Underdetermined systems have no sparse minimum-norm path yet.
+            Err(format!(
+                "sparse QR does not support underdetermined systems ({m} equations, {n} variables)"
+            ))
         }
     }
 
     #[cfg(not(feature = "sparse"))]
-    fn solve_sparse(&self, csr: &CsrMatrix, rhs: &[f64]) -> Option<Vec<f64>> {
+    fn solve_sparse(&self, csr: &CsrMatrix, rhs: &[f64]) -> Result<Vec<f64>, String> {
         // Without sparse feature, fall back to dense
         self.solve_dense(csr, rhs)
     }
 
     /// Solve the linear system using dense operations.
-    fn solve_dense(&self, csr: &CsrMatrix, rhs: &[f64]) -> Option<Vec<f64>> {
+    fn solve_dense(&self, csr: &CsrMatrix, rhs: &[f64]) -> Result<Vec<f64>, String> {
         use nalgebra::{DMatrix, DVector};
 
         let m = csr.nrows;
@@ -401,15 +372,15 @@ impl SparseSolver {
         if m == n {
             // Square system: try LU first
             if let Some(solution) = j.clone().lu().solve(&b) {
-                return Some(solution.as_slice().to_vec());
+                return Ok(solution.as_slice().to_vec());
             }
         }
 
         // Use SVD for rectangular or singular systems
         let svd = j.svd(true, true);
         svd.solve(&b, self.config.linear_tolerance)
-            .ok()
             .map(|s| s.as_slice().to_vec())
+            .map_err(|e| format!("dense SVD solve failed: {e}"))
     }
 
     /// Backtracking line search with Armijo condition.

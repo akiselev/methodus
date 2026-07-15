@@ -9,7 +9,6 @@
 //! dogleg is obtained via the full L-BFGS two-loop recursion.
 
 use std::collections::VecDeque;
-use std::time::Instant;
 
 use crate::optimization::{
     KktResidual, MultiplierStore, Objective, ObjectiveHessian, OptimizationConfig,
@@ -19,22 +18,42 @@ use crate::param::ParamStore;
 use crate::solver::bfgs::{
     dense_gradient, dot, lbfgs_direction, update_lbfgs_history, vec_norm, write_x_to_store,
 };
+use crate::time::{SolveClock, StdClock};
 
 /// Trust-region solver for unconstrained optimization.
-pub struct TrustRegionSolver;
+pub struct TrustRegionSolver {
+    config: OptimizationConfig,
+}
 
 impl TrustRegionSolver {
+    /// Create a solver with the given configuration.
+    pub fn new(config: OptimizationConfig) -> Self {
+        Self { config }
+    }
+
     /// Solve an unconstrained optimization problem using an exact Hessian.
     ///
     /// Uses the exact Hessian from `objective.hessian_entries()` instead of the
     /// scaled-identity L-BFGS approximation, giving quadratic convergence near
     /// the solution for problems where the Hessian is available.
     pub fn solve_with_hessian(
+        &self,
         objective: &dyn ObjectiveHessian,
         store: &mut ParamStore,
-        config: &OptimizationConfig,
     ) -> OptimizationResult {
-        let start = Instant::now();
+        self.solve_with_hessian_and_clock(objective, store, &StdClock)
+    }
+
+    /// Like [`solve_with_hessian`](Self::solve_with_hessian), with a
+    /// host-provided clock for duration reporting.
+    pub fn solve_with_hessian_and_clock(
+        &self,
+        objective: &dyn ObjectiveHessian,
+        store: &mut ParamStore,
+        clock: &impl SolveClock,
+    ) -> OptimizationResult {
+        let config = &self.config;
+        let start = clock.mark();
         let mapping = store.build_solver_mapping();
         let n = mapping.len();
 
@@ -52,15 +71,15 @@ impl TrustRegionSolver {
                 },
                 multipliers: MultiplierStore::new(),
                 constraint_violations: Vec::new(),
-                duration: start.elapsed(),
+                duration: clock.elapsed(&start),
             };
         }
 
         let param_ids = &mapping.col_to_param;
         let mut x: Vec<f64> = param_ids.iter().map(|&pid| store.get(pid)).collect();
 
-        let mut delta = config.trust_region_init;
-        let delta_max = config.trust_region_max;
+        let mut delta = config.trust_region.initial_radius;
+        let delta_max = config.trust_region.max_radius;
         let eta = 0.1;
 
         write_x_to_store(store, param_ids, &x);
@@ -88,14 +107,14 @@ impl TrustRegionSolver {
                     },
                     multipliers: MultiplierStore::new(),
                     constraint_violations: Vec::new(),
-                    duration: start.elapsed(),
+                    duration: clock.elapsed(&start),
                 };
             }
 
             // Build dense Hessian matrix from sparse entries.
             let hessian = build_dense_hessian(objective, store, param_ids, n);
 
-            let step = if n < config.tr_subproblem_threshold {
+            let step = if n < config.trust_region.subproblem_threshold {
                 dogleg_step_exact(&grad, &hessian, delta, n)
             } else {
                 steihaug_cg_exact(&grad, &hessian, delta, n)
@@ -149,17 +168,25 @@ impl TrustRegionSolver {
             },
             multipliers: MultiplierStore::new(),
             constraint_violations: Vec::new(),
-            duration: start.elapsed(),
+            duration: clock.elapsed(&start),
         }
     }
 
     /// Solve an unconstrained optimization problem using a trust-region method.
-    pub fn solve(
+    pub fn solve(&self, objective: &dyn Objective, store: &mut ParamStore) -> OptimizationResult {
+        self.solve_with_clock(objective, store, &StdClock)
+    }
+
+    /// Like [`solve`](Self::solve), but with a host-provided clock for
+    /// duration reporting.
+    pub fn solve_with_clock(
+        &self,
         objective: &dyn Objective,
         store: &mut ParamStore,
-        config: &OptimizationConfig,
+        clock: &impl SolveClock,
     ) -> OptimizationResult {
-        let start = Instant::now();
+        let config = &self.config;
+        let start = clock.mark();
         let mapping = store.build_solver_mapping();
         let n = mapping.len();
 
@@ -177,15 +204,15 @@ impl TrustRegionSolver {
                 },
                 multipliers: MultiplierStore::new(),
                 constraint_violations: Vec::new(),
-                duration: start.elapsed(),
+                duration: clock.elapsed(&start),
             };
         }
 
         let param_ids = &mapping.col_to_param;
         let mut x: Vec<f64> = param_ids.iter().map(|&pid| store.get(pid)).collect();
 
-        let mut delta = config.trust_region_init;
-        let delta_max = config.trust_region_max;
+        let mut delta = config.trust_region.initial_radius;
+        let delta_max = config.trust_region.max_radius;
         let eta = 0.1;
 
         let m = config.lbfgs_memory;
@@ -217,11 +244,11 @@ impl TrustRegionSolver {
                     },
                     multipliers: MultiplierStore::new(),
                     constraint_violations: Vec::new(),
-                    duration: start.elapsed(),
+                    duration: clock.elapsed(&start),
                 };
             }
 
-            let step = if n < config.tr_subproblem_threshold {
+            let step = if n < config.trust_region.subproblem_threshold {
                 dogleg_step(&grad, &s_history, &y_history, delta, n)
             } else {
                 steihaug_cg(&grad, &s_history, &y_history, delta, n)
@@ -283,7 +310,7 @@ impl TrustRegionSolver {
             },
             multipliers: MultiplierStore::new(),
             constraint_violations: Vec::new(),
-            duration: start.elapsed(),
+            duration: clock.elapsed(&start),
         }
     }
 }
@@ -551,6 +578,9 @@ fn dogleg_step_exact(grad: &[f64], hessian: &[Vec<f64>], delta: f64, _n: usize) 
 /// Solve H·x = b using Cholesky-like approach or Gauss elimination.
 ///
 /// Falls back to gradient direction if the system is singular or indefinite.
+// Indexed loops read clearest for in-place Gaussian elimination, where row
+// `col` is read while row `row > col` is mutated.
+#[allow(clippy::needless_range_loop)]
 fn solve_linear_system(h: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let n = b.len();
     if n == 0 {
@@ -659,7 +689,7 @@ fn steihaug_cg_exact(grad: &[f64], hessian: &[Vec<f64>], delta: f64, n: usize) -
 /// Full quadratic predicted reduction: m(0) - m(p) = -(gᵀp + ½ pᵀHp).
 fn predicted_reduction_quadratic(grad: &[f64], step: &[f64], hessian: &[Vec<f64>]) -> f64 {
     let hp = dense_hessian_vec(hessian, step);
-    let gtP = dot(grad, step);
-    let ptHp = dot(step, &hp);
-    -(gtP + 0.5 * ptHp)
+    let g_dot_p = dot(grad, step);
+    let p_dot_hp = dot(step, &hp);
+    -(g_dot_p + 0.5 * p_dot_hp)
 }

@@ -12,9 +12,9 @@
 //! [`bounded_line_search`] additionally caps the step at `alpha_max` so the
 //! objective is never evaluated outside a feasible box.
 
-use crate::optimization::{Objective, OptimizationConfig};
+use crate::optimization::{LineSearchError, LineSearchFailure, Objective, OptimizationConfig};
 use crate::param::ParamStore;
-use crate::solver::bfgs::{dense_gradient, dot, vec_norm, write_x_to_store};
+use crate::solver::bfgs::{dense_gradient, dot, write_x_to_store};
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -38,32 +38,6 @@ pub struct LineSearchStep {
     pub f: f64,
     /// Which condition the step satisfied.
     pub condition: StepCondition,
-    /// Number of objective evaluations consumed.
-    pub f_evals: usize,
-    /// Number of gradient evaluations consumed.
-    pub grad_evals: usize,
-}
-
-/// Why a line search failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LineSearchError {
-    /// The supplied direction is not a descent direction (`∇f·d ≥ 0`).
-    NotDescentDirection,
-    /// The objective or gradient produced a non-finite value.
-    NonFiniteValue,
-    /// The step shrank below `line_search_min_step` without satisfying Armijo.
-    StepTooSmall,
-    /// The evaluation budget (`line_search_max_evals`) was exhausted.
-    EvaluationBudgetExceeded,
-    /// No feasible step exists along the direction (`alpha_max ≤ 0`).
-    InfeasibleDirection,
-}
-
-/// A failed line search, with the evaluations consumed before giving up.
-#[derive(Debug, Clone, Copy)]
-pub struct LineSearchFailure {
-    /// The failure reason.
-    pub reason: LineSearchError,
     /// Number of objective evaluations consumed.
     pub f_evals: usize,
     /// Number of gradient evaluations consumed.
@@ -103,11 +77,7 @@ impl<'a> Evaluator<'a> {
     }
 
     /// Write `x + alpha·d` into the store and evaluate the objective there.
-    fn value_at(
-        &mut self,
-        store: &mut ParamStore,
-        alpha: f64,
-    ) -> Result<f64, LineSearchFailure> {
+    fn value_at(&mut self, store: &mut ParamStore, alpha: f64) -> Result<f64, LineSearchFailure> {
         self.check_budget()?;
         self.f_evals += 1;
         let x_trial: Vec<f64> = self
@@ -128,10 +98,7 @@ impl<'a> Evaluator<'a> {
     /// Directional derivative `∇f(x + alpha·d)·d` at the store's current point.
     ///
     /// Must be called immediately after `value_at` with the same `alpha`.
-    fn slope_at_current(
-        &mut self,
-        store: &ParamStore,
-    ) -> Result<f64, LineSearchFailure> {
+    fn slope_at_current(&mut self, store: &ParamStore) -> Result<f64, LineSearchFailure> {
         self.check_budget()?;
         self.grad_evals += 1;
         let grad = dense_gradient(self.objective, store, self.param_ids, self.x.len());
@@ -263,7 +230,7 @@ fn search_impl(
         param_ids,
         x,
         direction,
-        budget: config.line_search_max_evals.max(4),
+        budget: config.line_search.max_evals.max(4),
         f_evals: 0,
         grad_evals: 0,
     };
@@ -306,8 +273,8 @@ fn wolfe_bracket(
     config: &OptimizationConfig,
 ) -> Result<LineSearchStep, LineSearchFailure> {
     const MAX_BRACKET_ITERS: usize = 10;
-    let c1 = config.armijo_c1;
-    let c2 = config.wolfe_c2;
+    let c1 = config.line_search.armijo_c1;
+    let c2 = config.line_search.wolfe_c2;
 
     let mut alpha_prev = 0.0_f64;
     let mut f_prev = f_x;
@@ -388,7 +355,7 @@ fn zoom(
         let f_j = ev.value_at(store, alpha_j)?;
 
         let armijo_ok = f_j <= f_x + c1 * alpha_j * dg0;
-        if armijo_ok && best.map_or(true, |(_, bf)| f_j < bf) {
+        if armijo_ok && best.is_none_or(|(_, bf)| f_j < bf) {
             best = Some((alpha_j, f_j));
         }
 
@@ -412,7 +379,7 @@ fn zoom(
             dg_lo = dg_j;
         }
 
-        if (alpha_hi - alpha_lo).abs() < config.line_search_min_step {
+        if (alpha_hi - alpha_lo).abs() < config.line_search.min_step {
             break;
         }
     }
@@ -458,9 +425,9 @@ fn armijo_backtrack(
     alpha_max: f64,
     config: &OptimizationConfig,
 ) -> Result<LineSearchStep, LineSearchFailure> {
-    let c1 = config.armijo_c1;
-    let backtrack = config.line_search_backtrack;
-    let min_step = config.line_search_min_step;
+    let c1 = config.line_search.armijo_c1;
+    let backtrack = config.line_search.backtrack;
+    let min_step = config.line_search.min_step;
     let mut alpha = 1.0_f64.min(alpha_max);
 
     loop {
@@ -486,12 +453,6 @@ fn armijo_backtrack(
             return Err(ev.failure(LineSearchError::StepTooSmall));
         }
     }
-}
-
-/// Compute the Euclidean norm of a slice (re-exported for convenience in tests).
-#[allow(dead_code)]
-pub(crate) fn norm(v: &[f64]) -> f64 {
-    vec_norm(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -656,7 +617,10 @@ mod tests {
             params: ids.clone(),
         };
         let config = OptimizationConfig {
-            line_search_max_evals: 4,
+            line_search: crate::optimization::LineSearchConfig {
+                max_evals: 4,
+                ..Default::default()
+            },
             ..OptimizationConfig::default()
         };
         let x = vec![4.0];

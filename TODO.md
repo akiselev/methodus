@@ -121,7 +121,7 @@ already done — see "Done" below.)
 - [ ] Implement interpreted, finite-difference, symbolic, and JIT evaluators.
 - [ ] Let Newton, LM, robust, sparse, and future solvers consume any evaluator, with identical convergence/fallback behavior across backends.
 - [ ] Cache compiled functions by a stable structural fingerprint.
-- [ ] Expose compilation failures in diagnostics, with configurable fallback.
+- [x] Expose compilation failures in diagnostics: `JitFallback` + `JITSolver::last_jit_fallback()` report why a solve fell back (forced, no lowering, platform, threshold, compile error) *(2026-07-15)*.
 - [ ] Calibrate `jit_threshold` (still hardcoded 1000/500) empirically; consider two-tier thresholds for one-shot vs. repeated interactive solves.
 - [ ] Benchmark compile cost, evaluation cost, total solve time, and cache reuse separately.
 
@@ -155,18 +155,21 @@ dense `n × n` Hessian even on the Steihaug-CG (large-n) path.
 
 ## P2: Stable geometric modeling API
 
-### 10. Replace raw IDs and panics with typed handles
+### 10. Replace raw IDs and panics with typed handles — DONE 2026-07-15 (except transactions/arcs)
 
-`Sketch2DBuilder` takes raw `EntityId`s and panics on wrong/unknown entity types.
-
-- [ ] Typed handles: `PointHandle`, `LineHandle`, `CircleHandle`, `ArcHandle`, `ConstraintHandle<C>`; make invalid combinations unrepresentable where practical.
-- [ ] Return `Result` with a public `BuilderError` instead of panicking.
-- [ ] Validate stale generational IDs at API boundaries.
+- [x] Typed handles: `PointHandle`, `LineHandle`, `CircleHandle` on `Sketch2DBuilder`; wrong
+      entity kinds are now unrepresentable at compile time. (`ArcHandle` waits on §11 arc support;
+      `ConstraintHandle<C>` not yet needed — constraints keep plain `ConstraintId`.)
+- [x] `Result` + public `BuilderError` instead of panicking (`UnknownEntity` for foreign handles).
+- [x] Stale generational IDs validated at API boundaries: `add_entity`/`add_constraint` assert the
+      ID came from this system's allocator; `remove_entity`/`remove_constraint` return
+      `RemovalError::StaleId` instead of silently no-opping; `ParamStore::is_alive()` added.
 - [ ] Add batch-edit transactions so failed edits can roll back.
-- [ ] Define entity/constraint removal semantics — lines share point parameters; removal currently leaves referring constraints in place:
-  - [ ] Track reverse references.
-  - [ ] Refuse removal while dependents exist, cascade explicitly, or use reference-counted parameter ownership.
-  - [ ] Add integrity validation before every solve in debug mode.
+- [x] Entity/constraint removal semantics defined: `remove_entity` refuses while dependent
+      constraints reference the entity (`HasDependentConstraints`) or another entity shares its
+      params (`SharedParams`) — no more dangling ParamIds from shared line-segment endpoints.
+- [x] Debug-mode integrity validation before every solve
+      (`ConstraintSystem::debug_validate_integrity`).
 
 ### 11. Complete the sketch domain
 
@@ -198,13 +201,36 @@ Builder metadata supports points, lines, circles — but not arcs, despite the l
 
 - [ ] Residual weighting and variable scaling; automatic scaling from Jacobian column norms.
 - [ ] Robust least-squares losses: Huber, Cauchy, soft-L1, Tukey.
-- [ ] Per-residual tolerances and units.
+- [ ] Per-residual tolerances and units. *(Parasolid RE: role-aware linear vs angular —
+  default `1e-8` linear / `1e-11` angular session precision + relative ε-multiples; mixed
+  mm/rad residuals under one tolerance is dimensionally wrong. See
+  `docs/notes/parasolid-kernel-lessons.md` #2.)*
 - [ ] Iteration callbacks and structured tracing.
 - [ ] Cancellation and wall-clock/evaluation budgets.
 - [ ] Covariance and rank estimates for least-squares solutions.
 - [ ] Better rank-deficiency diagnostics and null-space bases.
 - [ ] A detailed result containing each residual's name, value, scale, and associated constraint.
-- [ ] Deterministic solver policies for reproducible applications and tests.
+- [ ] Deterministic solver policies for reproducible applications and tests. *(Parasolid RE:
+  ships scalar-deterministic, non-SIMD math (~178:1) for bit-identical cross-platform solves;
+  our `rayon`/`faer` parallel reductions break this. Add a single- vs multi-thread reproducibility
+  regression test. Lessons doc #5.)*
+
+**From the Parasolid numeric-core RE** (`docs/notes/parasolid-kernel-lessons.md` — evidence
+from `../parasolid-re/`; new items not already covered above):
+- [ ] Per-component residual **noise-gating / dead-zone** (floor `|rᵢ| < ε` to 0 before `‖r‖²`) —
+  the most-repeated robustness trick in the binary; a few lines in `newton_raphson.rs` + the
+  BFGS gradient norm. Lessons doc #1.
+- [ ] **Damped-Newton-Cramer micro-cluster fast path** for decomposed `n ≤ 3` square systems:
+  direct Cramer step + monotone-residual-decrease acceptance + ≤10 step-halvings (×0.5) +
+  determinant singular-guard, cap 20; route tiny clusters here before the general NR/SVD path.
+  Pairs with a cheap `ParamStore` checkpoint/rollback around the speculative step. Lessons doc #3, #7.
+- [ ] **Typed failure + non-poisonous exit**: extend `OptimizationStatus` with `SingularJacobian`
+  / `Diverged` / `MaxItersUnconverged`; a diverged solve must leave params in a documented state,
+  never a half-applied step. Lessons doc #4.
+- [ ] **Solver↔kernel constraint-evaluation seam** (before wiring cadabra2): geometric constraints
+  (`PointOnSurface`, `TangentToSurface`, …) take residual + Jacobian rows from the kernel's surface
+  derivatives, and share ONE tolerance model with the kernel; budget for the nested inner
+  projection (warm-start it across outer iterations). Lessons doc "solver ↔ kernel contract".
 
 *(The review also listed `ProblemBuilder` here, but it already exists — `problem.rs`, exported from `lib.rs`.)*
 
@@ -214,17 +240,17 @@ Builder metadata supports points, lines, circles — but not arcs, despite the l
 
 ### Packaging / features
 
-- [ ] Shrink the default feature set (probably `std` + optionally `macros`); make `jit`, `parallel`, `sparse`, `nist` opt-in.
+- [x] Default features shrunk to `std` + `macros`; `jit`, `parallel`, `sparse`, `nist` opt-in; CI main job runs `--all-features` *(2026-07-15)*.
 - [ ] Decide whether `std` is a real portability boundary (core solver modules use `std` directly; the empty `std` feature isn't a meaningful `no_std` design today).
-- [ ] Add `repository`, `documentation`, `homepage`, `readme`, `keywords`, `categories`, `rust-version` to package metadata.
+- [x] Package metadata added: `repository`, `readme`, `keywords`, `categories`, `rust-version` (`documentation`/`homepage` default to docs.rs) *(2026-07-15)*.
 - [ ] Changelog and semver policy.
 - [ ] API docs distinguishing stable vs. experimental modules.
-- [ ] Audit `pub` vs `pub(crate)` surface (beyond the already-hidden `__jit_reexports`).
+- [x] `pub` vs `pub(crate)` surface audited: solver algorithm modules (`alm`, `bfgs`, `bfgs_b`, `line_search`, `trust_region`) are `pub(crate)` behind curated re-exports; `#![warn(missing_docs)]` enabled on both crates with zero gaps *(2026-07-15)*.
 - [ ] `cargo publish --dry-run` in release validation before tag-triggered publication.
 
 ### CI
 
-- [ ] `cargo fmt --check`; Clippy with warnings denied.
+- [x] `cargo fmt --check` + `cargo clippy --workspace --all-targets --all-features -- -D warnings` CI job; workspace is warning-free *(2026-07-15)*.
 - [ ] `cargo hack` feature-powerset checks.
 - [ ] Linux, macOS, Windows jobs; x86-64 and ARM coverage where JIT behavior differs.
 - [ ] Establish and test an MSRV.

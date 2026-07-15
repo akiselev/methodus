@@ -25,11 +25,8 @@ use crate::param::ParamStore;
 /// Using the squared formulation avoids the square-root singularity at zero
 /// distance and simplifies the Jacobian.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Distance3D {
     id: ConstraintId,
-    p1: EntityId,
-    p2: EntityId,
     distance: f64,
     x1: ParamId,
     y1: ParamId,
@@ -45,6 +42,7 @@ impl Distance3D {
     /// Create a distance constraint between two 3D points.
     ///
     /// `distance` is the target distance (not squared).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         p1: EntityId,
@@ -59,8 +57,6 @@ impl Distance3D {
     ) -> Self {
         Self {
             id,
-            p1,
-            p2,
             distance,
             x1,
             y1,
@@ -125,11 +121,8 @@ impl Constraint for Distance3D {
 ///
 /// Residuals: `[x2-x1, y2-y1, z2-z1]`
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Coincident3D {
     id: ConstraintId,
-    p1: EntityId,
-    p2: EntityId,
     x1: ParamId,
     y1: ParamId,
     z1: ParamId,
@@ -142,6 +135,7 @@ pub struct Coincident3D {
 
 impl Coincident3D {
     /// Create a coincident constraint between two 3D points.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         p1: EntityId,
@@ -155,8 +149,6 @@ impl Coincident3D {
     ) -> Self {
         Self {
             id,
-            p1,
-            p2,
             x1,
             y1,
             z1,
@@ -214,10 +206,8 @@ impl Constraint for Coincident3D {
 ///
 /// Residuals: `[x - tx, y - ty, z - tz]`
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Fixed3D {
     id: ConstraintId,
-    entity: EntityId,
     target: [f64; 3],
     x: ParamId,
     y: ParamId,
@@ -240,7 +230,6 @@ impl Fixed3D {
     ) -> Self {
         Self {
             id,
-            entity,
             target,
             x,
             y,
@@ -292,11 +281,8 @@ impl Constraint for Fixed3D {
 /// where `(p0x, p0y, p0z)` is a point on the plane and `(nx, ny, nz)` is
 /// the plane normal.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PointOnPlane {
     id: ConstraintId,
-    point_entity: EntityId,
-    plane_entity: EntityId,
     // Point params
     px: ParamId,
     py: ParamId,
@@ -315,6 +301,7 @@ pub struct PointOnPlane {
 
 impl PointOnPlane {
     /// Create a point-on-plane constraint.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         point_entity: EntityId,
@@ -331,8 +318,6 @@ impl PointOnPlane {
     ) -> Self {
         Self {
             id,
-            point_entity,
-            plane_entity,
             px,
             py,
             pz,
@@ -422,10 +407,8 @@ impl Constraint for PointOnPlane {
 ///
 /// This produces one equation per point.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Coplanar {
     id: ConstraintId,
-    plane_entity: EntityId,
     // Plane point and normal
     p0x: ParamId,
     p0y: ParamId,
@@ -434,7 +417,6 @@ pub struct Coplanar {
     ny: ParamId,
     nz: ParamId,
     // Point entities and their coordinates
-    point_entities: Vec<EntityId>,
     point_params: Vec<(ParamId, ParamId, ParamId)>,
     all_params: Vec<ParamId>,
     all_entities: Vec<EntityId>,
@@ -444,6 +426,7 @@ impl Coplanar {
     /// Create a coplanar constraint.
     ///
     /// `points` is a slice of `(entity_id, px, py, pz)` tuples.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         plane_entity: EntityId,
@@ -457,11 +440,9 @@ impl Coplanar {
     ) -> Self {
         let mut all_params = vec![p0x, p0y, p0z, nx, ny, nz];
         let mut all_entities = vec![plane_entity];
-        let mut point_entities = Vec::new();
         let mut point_params = Vec::new();
 
         for &(eid, px, py, pz) in points {
-            point_entities.push(eid);
             point_params.push((px, py, pz));
             all_params.extend_from_slice(&[px, py, pz]);
             all_entities.push(eid);
@@ -469,14 +450,12 @@ impl Coplanar {
 
         Self {
             id,
-            plane_entity,
             p0x,
             p0y,
             p0z,
             nx,
             ny,
             nz,
-            point_entities,
             point_params,
             all_params,
             all_entities,
@@ -570,11 +549,8 @@ impl Constraint for Coplanar {
 /// - `d1y*d2z - d1z*d2y`
 /// - `d1z*d2x - d1x*d2z`
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Parallel3D {
     id: ConstraintId,
-    line1: EntityId,
-    line2: EntityId,
     // Direction of line 1: (x2-x1, y2-y1, z2-z1) via endpoint params
     l1_x1: ParamId,
     l1_y1: ParamId,
@@ -595,6 +571,7 @@ pub struct Parallel3D {
 
 impl Parallel3D {
     /// Create a parallel constraint between two 3D line segments.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         line1: EntityId,
@@ -614,8 +591,6 @@ impl Parallel3D {
     ) -> Self {
         Self {
             id,
-            line1,
-            line2,
             l1_x1,
             l1_y1,
             l1_z1,
@@ -729,11 +704,8 @@ impl Constraint for Parallel3D {
 ///
 /// Residual: `d1 . d2 = d1x*d2x + d1y*d2y + d1z*d2z = 0`
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Perpendicular3D {
     id: ConstraintId,
-    line1: EntityId,
-    line2: EntityId,
     l1_x1: ParamId,
     l1_y1: ParamId,
     l1_z1: ParamId,
@@ -752,6 +724,7 @@ pub struct Perpendicular3D {
 
 impl Perpendicular3D {
     /// Create a perpendicular constraint between two 3D line segments.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         line1: EntityId,
@@ -771,8 +744,6 @@ impl Perpendicular3D {
     ) -> Self {
         Self {
             id,
-            line1,
-            line2,
             l1_x1,
             l1_y1,
             l1_z1,
@@ -869,11 +840,8 @@ impl Constraint for Perpendicular3D {
 ///
 /// Total: 4 equations (but the system has rank at most 4).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Coaxial {
     id: ConstraintId,
-    axis1: EntityId,
-    axis2: EntityId,
     // Axis 1: point (p1x, p1y, p1z), direction (d1x, d1y, d1z)
     p1x: ParamId,
     p1y: ParamId,
@@ -894,6 +862,7 @@ pub struct Coaxial {
 
 impl Coaxial {
     /// Create a coaxial constraint between two 3D axes.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         axis1: EntityId,
@@ -913,8 +882,6 @@ impl Coaxial {
     ) -> Self {
         Self {
             id,
-            axis1,
-            axis2,
             p1x,
             p1y,
             p1z,
@@ -995,38 +962,33 @@ impl Constraint for Coaxial {
             store.get(self.p2z) - store.get(self.p1z),
         ];
 
-        let mut jac = Vec::new();
-
-        // Row 0: cross_x = d1y*d2z - d1z*d2y
-        jac.push((0, self.d1y, d2[2]));
-        jac.push((0, self.d1z, -d2[1]));
-        jac.push((0, self.d2z, d1[1]));
-        jac.push((0, self.d2y, -d1[2]));
-
-        // Row 1: cross_y = d1z*d2x - d1x*d2z
-        jac.push((1, self.d1z, d2[0]));
-        jac.push((1, self.d1x, -d2[2]));
-        jac.push((1, self.d2x, d1[2]));
-        jac.push((1, self.d2z, -d1[0]));
-
-        // Row 2: pcross_x = dp_y*d1z - dp_z*d1y
-        // dp_y = p2y - p1y, dp_z = p2z - p1z
-        jac.push((2, self.p2y, d1[2]));
-        jac.push((2, self.p1y, -d1[2]));
-        jac.push((2, self.p2z, -d1[1]));
-        jac.push((2, self.p1z, d1[1]));
-        jac.push((2, self.d1z, dp[1]));
-        jac.push((2, self.d1y, -dp[2]));
-
-        // Row 3: pcross_y = dp_z*d1x - dp_x*d1z
-        jac.push((3, self.p2z, d1[0]));
-        jac.push((3, self.p1z, -d1[0]));
-        jac.push((3, self.p2x, -d1[2]));
-        jac.push((3, self.p1x, d1[2]));
-        jac.push((3, self.d1x, dp[2]));
-        jac.push((3, self.d1z, -dp[0]));
-
-        jac
+        vec![
+            // Row 0: cross_x = d1y*d2z - d1z*d2y
+            (0, self.d1y, d2[2]),
+            (0, self.d1z, -d2[1]),
+            (0, self.d2z, d1[1]),
+            (0, self.d2y, -d1[2]),
+            // Row 1: cross_y = d1z*d2x - d1x*d2z
+            (1, self.d1z, d2[0]),
+            (1, self.d1x, -d2[2]),
+            (1, self.d2x, d1[2]),
+            (1, self.d2z, -d1[0]),
+            // Row 2: pcross_x = dp_y*d1z - dp_z*d1y
+            // dp_y = p2y - p1y, dp_z = p2z - p1z
+            (2, self.p2y, d1[2]),
+            (2, self.p1y, -d1[2]),
+            (2, self.p2z, -d1[1]),
+            (2, self.p1z, d1[1]),
+            (2, self.d1z, dp[1]),
+            (2, self.d1y, -dp[2]),
+            // Row 3: pcross_y = dp_z*d1x - dp_x*d1z
+            (3, self.p2z, d1[0]),
+            (3, self.p1z, -d1[0]),
+            (3, self.p2x, -d1[2]),
+            (3, self.p1x, d1[2]),
+            (3, self.d1x, dp[2]),
+            (3, self.d1z, -dp[0]),
+        ]
     }
 }
 

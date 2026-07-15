@@ -637,6 +637,8 @@ impl SimpleQuadObjective {
 fn test_objective_gradient_simple_quadratic() {
     let obj = SimpleQuadObjective;
     let x = vec![3.0, 5.0];
+    // f(3,5) = (3-1)^2 + (5-2)^2 = 13
+    assert!((obj.value(&x) - 13.0).abs() < 1e-15);
     let grad = obj.gradient_entries(&x);
 
     // ∂f/∂x[0] = 2*(x[0]-1) = 2*(3-1) = 4.0
@@ -744,6 +746,8 @@ fn test_objective_gradient_with_runtime_constants() {
         target_y: 7.0,
     };
     let x = vec![5.0, 10.0];
+    // f(5,10) = (5-3)^2 + (10-7)^2 = 13
+    assert!((obj.value(&x) - 13.0).abs() < 1e-15);
     let grad = obj.gradient_entries(&x);
 
     let g0 = grad.iter().find(|(i, _)| *i == 0).map(|(_, v)| *v).unwrap();

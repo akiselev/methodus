@@ -23,14 +23,13 @@
 //! stagnant violation and reported as `Infeasible` rather than a generic
 //! iteration limit.
 
-use std::time::Instant;
-
 use crate::constraint::Constraint;
 use crate::optimization::{
     InequalityFn, KktResidual, MultiplierId, MultiplierInitStrategy, MultiplierStore, Objective,
     OptimizationConfig, OptimizationResult, OptimizationStatus,
 };
 use crate::param::ParamStore;
+use crate::time::{SolveClock, StdClock};
 
 fn compute_complementarity(
     inequalities: &[&dyn InequalityFn],
@@ -144,9 +143,16 @@ fn build_multiplier_store(
 }
 
 /// Augmented Lagrangian Method solver.
-pub struct AlmSolver;
+pub struct AlmSolver {
+    config: OptimizationConfig,
+}
 
 impl AlmSolver {
+    /// Create a solver with the given configuration.
+    pub fn new(config: OptimizationConfig) -> Self {
+        Self { config }
+    }
+
     /// Solve a constrained optimization problem.
     ///
     /// Minimizes `objective.value(store)` subject to equality constraints
@@ -164,14 +170,36 @@ impl AlmSolver {
     /// 5. Report `Infeasible` when ρ saturates without feasibility progress,
     ///    and propagate inner-solver failures instead of iterating blindly.
     pub fn solve(
+        &self,
         objective: &dyn Objective,
         constraints: &[&dyn Constraint],
         inequalities: &[&dyn InequalityFn],
         store: &mut ParamStore,
-        config: &OptimizationConfig,
         warm_start: Option<&MultiplierStore>,
     ) -> OptimizationResult {
-        let start = Instant::now();
+        self.solve_with_clock(
+            objective,
+            constraints,
+            inequalities,
+            store,
+            warm_start,
+            &StdClock,
+        )
+    }
+
+    /// Like [`solve`](Self::solve), but with a host-provided clock for
+    /// duration reporting.
+    pub fn solve_with_clock(
+        &self,
+        objective: &dyn Objective,
+        constraints: &[&dyn Constraint],
+        inequalities: &[&dyn InequalityFn],
+        store: &mut ParamStore,
+        warm_start: Option<&MultiplierStore>,
+        clock: &impl SolveClock,
+    ) -> OptimizationResult {
+        let config = &self.config;
+        let start = clock.mark();
         let mapping = store.build_solver_mapping();
         let n = mapping.len();
 
@@ -201,7 +229,7 @@ impl AlmSolver {
                 },
                 multipliers: MultiplierStore::new(),
                 constraint_violations: violations,
-                duration: start.elapsed(),
+                duration: clock.elapsed(&start),
             };
         }
 
@@ -211,11 +239,11 @@ impl AlmSolver {
         let use_bfgs_b = store.any_free_finite_bounds();
 
         // Initialize multipliers (warm-start if requested and available).
-        let mut lambda = match (&config.multiplier_init, &warm_start) {
+        let mut lambda = match (&config.alm.multiplier_init, &warm_start) {
             (MultiplierInitStrategy::WarmStart, Some(ms)) => ms.extract_equality_vec(constraints),
             _ => vec![0.0; total_eq],
         };
-        let mut mu = match (&config.multiplier_init, &warm_start) {
+        let mut mu = match (&config.alm.multiplier_init, &warm_start) {
             (MultiplierInitStrategy::WarmStart, Some(ms)) => {
                 ms.extract_inequality_vec(inequalities)
             }
@@ -224,13 +252,13 @@ impl AlmSolver {
         // Dual feasibility requires μ ≥ 0: clamp warm-started (or otherwise
         // invalid) inequality multipliers.
         for m in &mut mu {
-            *m = m.max(0.0).min(config.max_multiplier);
+            *m = m.max(0.0).min(config.alm.max_multiplier);
         }
         for l in &mut lambda {
-            *l = l.clamp(-config.max_multiplier, config.max_multiplier);
+            *l = l.clamp(-config.alm.max_multiplier, config.alm.max_multiplier);
         }
 
-        let mut rho = config.rho_init;
+        let mut rho = config.alm.rho_init;
         let mut prev_violation = f64::INFINITY;
         let mut stalled_outers = 0usize;
         let mut total_inner_iters = 0;
@@ -253,9 +281,17 @@ impl AlmSolver {
                 ..config.clone()
             };
             let inner_result = if use_bfgs_b {
-                super::bfgs_b::BfgsBSolver::solve(&alm_objective, store, &inner_config)
+                super::bfgs_b::BfgsBSolver::new(inner_config).solve_with_clock(
+                    &alm_objective,
+                    store,
+                    clock,
+                )
             } else {
-                super::bfgs::BfgsSolver::solve(&alm_objective, store, &inner_config)
+                super::bfgs::BfgsSolver::new(inner_config).solve_with_clock(
+                    &alm_objective,
+                    store,
+                    clock,
+                )
             };
 
             total_inner_iters += inner_result.outer_iterations;
@@ -281,11 +317,11 @@ impl AlmSolver {
                     },
                     multipliers: build_multiplier_store(constraints, inequalities, &lambda, &mu),
                     constraint_violations: collect_violations(constraints, inequalities, store),
-                    duration: start.elapsed(),
+                    duration: clock.elapsed(&start),
                 };
             }
             let inner_line_search_failed =
-                matches!(inner_result.status, OptimizationStatus::LineSearchFailed);
+                matches!(inner_result.status, OptimizationStatus::LineSearchFailed(_));
 
             // First-order multiplier updates (Hestenes-Powell):
             //   λ ← λ + ρ g(x),  μ ← max(0, μ + ρ h(x)).
@@ -297,7 +333,7 @@ impl AlmSolver {
             for c in constraints {
                 for r in c.residuals(store) {
                     lambda_new[eq_idx] = (lambda_new[eq_idx] + rho * r)
-                        .clamp(-config.max_multiplier, config.max_multiplier);
+                        .clamp(-config.alm.max_multiplier, config.alm.max_multiplier);
                     eq_idx += 1;
                 }
             }
@@ -307,7 +343,7 @@ impl AlmSolver {
                 for v in h.values(store) {
                     mu_new[ineq_idx] = (mu_new[ineq_idx] + rho * v)
                         .max(0.0)
-                        .min(config.max_multiplier);
+                        .min(config.alm.max_multiplier);
                     ineq_idx += 1;
                 }
             }
@@ -365,14 +401,14 @@ impl AlmSolver {
                         &mu_new,
                     ),
                     constraint_violations: collect_violations(constraints, inequalities, store),
-                    duration: start.elapsed(),
+                    duration: clock.elapsed(&start),
                 };
             }
 
             // Infeasibility / stall detection: penalty saturated (or the
             // inner solver can no longer make progress) while the combined
             // violation refuses to shrink toward tolerance.
-            if (rho >= config.rho_max || inner_line_search_failed)
+            if (rho >= config.alm.rho_max || inner_line_search_failed)
                 && violation_norm > config.outer_tolerance
             {
                 if violation_norm > 0.9 * prev_violation {
@@ -384,7 +420,7 @@ impl AlmSolver {
                     // A saturated penalty with materially non-zero violation
                     // is evidence of contradictory constraints; a stall at
                     // small violation (or before ρ saturates) is a stall.
-                    let status = if rho >= config.rho_max
+                    let status = if rho >= config.alm.rho_max
                         && violation_norm > config.outer_tolerance.max(1e-4)
                     {
                         OptimizationStatus::Infeasible
@@ -407,12 +443,8 @@ impl AlmSolver {
                             &lambda_new,
                             &mu_new,
                         ),
-                        constraint_violations: collect_violations(
-                            constraints,
-                            inequalities,
-                            store,
-                        ),
-                        duration: start.elapsed(),
+                        constraint_violations: collect_violations(constraints, inequalities, store),
+                        duration: clock.elapsed(&start),
                     };
                 }
             }
@@ -425,7 +457,7 @@ impl AlmSolver {
             // enough. Using the combined measure means inequality-only
             // problems also drive ρ growth.
             if violation_norm > 0.25 * prev_violation {
-                rho = (rho * config.rho_growth).min(config.rho_max);
+                rho = (rho * config.alm.rho_growth).min(config.alm.rho_max);
             }
             prev_violation = violation_norm;
         }
@@ -455,7 +487,7 @@ impl AlmSolver {
             },
             multipliers: build_multiplier_store(constraints, inequalities, &lambda, &mu),
             constraint_violations: collect_violations(constraints, inequalities, store),
-            duration: start.elapsed(),
+            duration: clock.elapsed(&start),
         }
     }
 }

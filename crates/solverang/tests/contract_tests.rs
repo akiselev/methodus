@@ -406,7 +406,7 @@ mod sketch2d_entity_contracts {
     fn point2d_contracts() {
         let mut store = ParamStore::new();
         let e = eid(0);
-        let x = store.alloc(3.14, e);
+        let x = store.alloc(3.5, e);
         let y = store.alloc(2.72, e);
         let pt = Point2D::new(e, x, y);
 

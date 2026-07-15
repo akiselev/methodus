@@ -189,9 +189,9 @@
 //! let p0 = b.add_fixed_point(0.0, 0.0);
 //! let p1 = b.add_fixed_point(10.0, 0.0);
 //! let p2 = b.add_point(5.0, 1.0);
-//! b.constrain_distance(p0, p1, 10.0);
-//! b.constrain_distance(p1, p2, 8.0);
-//! b.constrain_distance(p2, p0, 6.0);
+//! b.constrain_distance(p0, p1, 10.0).unwrap();
+//! b.constrain_distance(p1, p2, 8.0).unwrap();
+//! b.constrain_distance(p2, p0, 6.0).unwrap();
 //! let mut system = b.build();
 //!
 //! let result = system.solve();
@@ -220,8 +220,8 @@
 //!
 //! ## `ConstraintSystem` — high-level, entity + constraint model
 //!
-//! [`ConstraintSystem`] (and the [`sketch2d::Sketch2DBuilder`] /
-//! [`sketch3d::Sketch3DBuilder`] convenience wrappers) let you think in terms
+//! [`ConstraintSystem`] (and the [`sketch2d::Sketch2DBuilder`] convenience
+//! wrapper; `sketch3d` and `assembly` construct entities directly) let you think in terms
 //! of geometric *entities* (points, lines, circles, rigid bodies) and
 //! *constraints* between them (distance, angle, coincident, mate …).
 //!
@@ -317,9 +317,10 @@
 //! |---------|---------|-------------|
 //! | `std` | yes | Standard library support |
 //! | `macros` | yes | Enables `#[auto_jacobian]` proc macro for automatic symbolic differentiation |
-//! | `jit` | yes | Enables JIT compilation of constraint evaluators via Cranelift |
-//! | `parallel` | yes | Parallel component solving with rayon |
-//! | `sparse` | yes | Sparse matrix operations with faer |
+//! | `jit` | no | Enables JIT compilation of constraint evaluators via Cranelift |
+//! | `parallel` | no | Parallel component solving with rayon |
+//! | `sparse` | no | Sparse matrix operations with faer |
+//! | `nist` | no | NIST StRD nonlinear regression test problems |
 //!
 //! # Performance Considerations
 //!
@@ -354,6 +355,8 @@
 //!
 //! 4. **Sparsity**: For sparse problems, ensure your `jacobian()` implementation
 //!    only returns non-zero entries. This enables efficient sparse operations.
+
+#![warn(missing_docs)]
 
 // --- V3 Solver-First Architecture modules ---
 pub mod assembly;
@@ -410,7 +413,7 @@ pub use solverang_macros::{auto_diff, auto_jacobian, hessian, objective, residua
 #[cfg(feature = "jit")]
 pub use jit::{
     jit_available, CompiledConstraints, ConstraintOp, JITCompiler, JITConfig, JITError,
-    JITFunction, OpcodeEmitter, Reg,
+    JITFunction, JitMode, OpcodeEmitter, Reg,
 };
 
 #[cfg(feature = "jit")]
@@ -435,7 +438,8 @@ pub use time::{SolveClock, StdClock, ZeroClock};
 
 // --- Re-export optimization types ---
 pub use optimization::{
-    InequalityFn, KktResidual, MultiplierId, MultiplierInitStrategy, MultiplierStore, Objective,
-    ObjectiveHessian, ObjectiveId, OptimizationAlgorithm, OptimizationConfig, OptimizationResult,
-    OptimizationStatus,
+    AlmConfig, InequalityFn, KktResidual, LineSearchConfig, LineSearchError, LineSearchFailure,
+    MultiplierId, MultiplierInitStrategy, MultiplierStore, Objective, ObjectiveHessian,
+    ObjectiveId, OptimizationAlgorithm, OptimizationConfig, OptimizationResult, OptimizationStatus,
+    TrustRegionConfig,
 };

@@ -12,8 +12,8 @@ Types for defining optimization problems: objectives, constraints, configuration
 | `objective.rs` | `Objective` + `ObjectiveHessian` traits | Implementing custom objectives; `ObjectiveHessian` enables exact Hessian for trust-region |
 | `inequality.rs` | `InequalityFn` trait (h(x) ≤ 0) | Adding inequality constraints |
 | `multiplier_store.rs` | `MultiplierStore`, `MultiplierId` — sensitivity data from ALM | Accessing dual variables / sensitivity after solve |
-| `config.rs` | `OptimizationConfig`, `OptimizationAlgorithm` (`Auto`, `Bfgs`, `BfgsB`, `Alm`, `TrustRegion`), `MultiplierInitStrategy`; fields include `wolfe_c2`, `relative_tolerance`, `trust_region_init`, `trust_region_max`, `tr_subproblem_threshold` | Changing algorithm selection, tuning tolerances, configuring trust-region or line search |
-| `result.rs` | `OptimizationResult`, `KktResidual` (primal, dual, complementarity), `OptimizationStatus` | Processing solver output, checking convergence |
+| `config.rs` | `OptimizationConfig` (shared knobs + `line_search: LineSearchConfig`, `alm: AlmConfig`, `trust_region: TrustRegionConfig` sub-configs; `validate()`), `OptimizationAlgorithm`, `MultiplierInitStrategy` | Changing algorithm selection, tuning tolerances, configuring trust-region or line search |
+| `result.rs` | `OptimizationResult` (+`is_converged()`/`iterations()`), `KktResidual`, `OptimizationStatus` (`LineSearchFailed(LineSearchFailure)` carries reason + eval counts), `LineSearchError`/`LineSearchFailure` | Processing solver output, checking convergence |
 | `adapters.rs` | `LeastSquaresObjective` — adapts `Problem` trait to `Objective` | Wrapping existing least-squares problems for optimization solvers |
 | `README.md` | Architecture decisions for the optimization subsystem | Understanding solver dispatch and ALM structure |
 | `../solver/bfgs.rs` | L-BFGS unconstrained solver | Debugging gradient convergence |

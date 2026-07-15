@@ -7,7 +7,6 @@
 //! suitable as the default optimization algorithm.
 
 use std::collections::VecDeque;
-use std::time::Instant;
 
 use crate::optimization::{
     KktResidual, MultiplierStore, Objective, OptimizationConfig, OptimizationResult,
@@ -15,24 +14,40 @@ use crate::optimization::{
 };
 use crate::param::ParamStore;
 use crate::solver::line_search;
+use crate::time::{SolveClock, StdClock};
 
 /// L-BFGS solver for unconstrained optimization.
 ///
 /// Uses the two-loop recursion algorithm to approximate the inverse Hessian
 /// from the last `m` gradient pairs, combined with strong Wolfe line search.
-pub struct BfgsSolver;
+pub struct BfgsSolver {
+    config: OptimizationConfig,
+}
 
 impl BfgsSolver {
+    /// Create a solver with the given configuration.
+    pub fn new(config: OptimizationConfig) -> Self {
+        Self { config }
+    }
+
     /// Solve an unconstrained optimization problem.
     ///
     /// Minimizes `objective.value(store)` by adjusting the free parameters
     /// in `store`. Returns when `||gradient|| < tolerance` or max iterations reached.
-    pub fn solve(
+    pub fn solve(&self, objective: &dyn Objective, store: &mut ParamStore) -> OptimizationResult {
+        self.solve_with_clock(objective, store, &StdClock)
+    }
+
+    /// Like [`solve`](Self::solve), but with a host-provided clock for
+    /// duration reporting (mirrors `ConstraintSystem::solve_with_clock`).
+    pub fn solve_with_clock(
+        &self,
         objective: &dyn Objective,
         store: &mut ParamStore,
-        config: &OptimizationConfig,
+        clock: &impl SolveClock,
     ) -> OptimizationResult {
-        let start = Instant::now();
+        let config = &self.config;
+        let start = clock.mark();
         let mapping = store.build_solver_mapping();
         let n = mapping.len();
 
@@ -50,7 +65,7 @@ impl BfgsSolver {
                 },
                 multipliers: MultiplierStore::new(),
                 constraint_violations: Vec::new(),
-                duration: start.elapsed(),
+                duration: clock.elapsed(&start),
             };
         }
 
@@ -64,9 +79,9 @@ impl BfgsSolver {
         let mut y_history: VecDeque<Vec<f64>> = VecDeque::with_capacity(m);
 
         // Write x into store, compute initial gradient
-        write_x_to_store(store, &param_ids, &x);
+        write_x_to_store(store, param_ids, &x);
         let mut f = objective.value(store);
-        let mut grad = dense_gradient(objective, store, &param_ids, n);
+        let mut grad = dense_gradient(objective, store, param_ids, n);
         let mut grad_norm = vec_norm(&grad);
 
         for iter in 0..config.max_outer_iterations {
@@ -89,7 +104,7 @@ impl BfgsSolver {
                     },
                     multipliers: MultiplierStore::new(),
                     constraint_violations: Vec::new(),
-                    duration: start.elapsed(),
+                    duration: clock.elapsed(&start),
                 };
             }
 
@@ -104,7 +119,7 @@ impl BfgsSolver {
             }
 
             let mut attempt = line_search::line_search(
-                objective, store, &param_ids, &x, &direction, f, &grad, config,
+                objective, store, param_ids, &x, &direction, f, &grad, config,
             );
 
             // A failed search along a quasi-Newton direction may just mean
@@ -115,19 +130,19 @@ impl BfgsSolver {
                 y_history.clear();
                 direction = grad.iter().map(|g| -g).collect();
                 attempt = line_search::line_search(
-                    objective, store, &param_ids, &x, &direction, f, &grad, config,
+                    objective, store, param_ids, &x, &direction, f, &grad, config,
                 );
             }
 
             let step = match attempt {
                 Ok(step) => step,
-                Err(_) => {
+                Err(failure) => {
                     // The store was restored to x by the line search; report
                     // the best point found so far.
-                    write_x_to_store(store, &param_ids, &x);
+                    write_x_to_store(store, param_ids, &x);
                     return OptimizationResult {
                         objective_value: f,
-                        status: OptimizationStatus::LineSearchFailed,
+                        status: OptimizationStatus::LineSearchFailed(failure),
                         outer_iterations: iter,
                         inner_iterations: 0,
                         kkt_residual: KktResidual {
@@ -137,7 +152,7 @@ impl BfgsSolver {
                         },
                         multipliers: MultiplierStore::new(),
                         constraint_violations: Vec::new(),
-                        duration: start.elapsed(),
+                        duration: clock.elapsed(&start),
                     };
                 }
             };
@@ -152,7 +167,7 @@ impl BfgsSolver {
 
             // Compute new gradient (store already holds x_new after the
             // accepted line-search step).
-            let grad_new = dense_gradient(objective, store, &param_ids, n);
+            let grad_new = dense_gradient(objective, store, param_ids, n);
 
             // L-BFGS update: s = x_new - x, y = grad_new - grad
             let s: Vec<f64> = x_new.iter().zip(&x).map(|(a, b)| a - b).collect();
@@ -167,7 +182,7 @@ impl BfgsSolver {
         }
 
         // Max iterations reached
-        write_x_to_store(store, &param_ids, &x);
+        write_x_to_store(store, param_ids, &x);
         OptimizationResult {
             objective_value: f,
             status: OptimizationStatus::MaxIterationsReached,
@@ -180,7 +195,7 @@ impl BfgsSolver {
             },
             multipliers: MultiplierStore::new(),
             constraint_violations: Vec::new(),
-            duration: start.elapsed(),
+            duration: clock.elapsed(&start),
         }
     }
 }

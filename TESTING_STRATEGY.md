@@ -34,7 +34,7 @@ catches tests that assert too loosely.
 
 ```bash
 cargo install cargo-mutants
-cargo mutants -p solverang --features geometry,parallel,sparse
+cargo mutants -p solverang --features parallel,sparse
 ```
 
 **Priority targets for mutation testing:**
@@ -42,7 +42,7 @@ cargo mutants -p solverang --features geometry,parallel,sparse
 - `src/solver/lm_adapter.rs` — parameter mapping to/from `levenberg-marquardt` crate
 - `src/jacobian/numeric.rs` — finite-difference step sizes and formulas
 - `src/decomposition.rs` — union-find algorithm, graph construction
-- `src/geometry/constraints/` — each constraint's residual and Jacobian formulas
+- `src/sketch2d/constraints.rs`, `src/sketch3d/constraints.rs`, `src/assembly/constraints.rs` — each constraint's residual and Jacobian formulas
 
 **Specific areas likely to have surviving mutants:**
 - Tolerance comparisons (`< 1e-10` vs `<= 1e-10`)
@@ -76,7 +76,7 @@ cargo fuzz init  # creates fuzz/ directory
 fuzz/fuzz_targets/
 ├── fuzz_solver_inputs.rs      # Random residual/Jacobian pairs → solver
 ├── fuzz_jit_compiler.rs       # Random constraint descriptions → JIT compile + execute
-├── fuzz_constraint_system.rs  # Random point/constraint combos → geometry solver
+├── fuzz_constraint_system.rs  # Random point/constraint combos → ConstraintSystem
 └── fuzz_macro_input.rs        # Random expression trees → macro expansion
 ```
 

@@ -13,11 +13,13 @@ It ships with batteries-included 2D sketch, 3D sketch, and rigid-body assembly c
 solverang = "0.1"
 ```
 
-All the interesting features are on by default. If you want to be selective:
+The default build is lean: `std` plus the `macros` feature for `#[auto_jacobian]`.
+The heavier subsystems — Cranelift JIT, sparse algebra, parallel solving, and the
+NIST test problems — are opt-in:
 
 ```toml
 [dependencies]
-solverang = { version = "0.1", default-features = false, features = ["std"] }
+solverang = { version = "0.1", features = ["jit", "sparse", "parallel"] }
 ```
 
 ## A Tour of the Silly Solver
@@ -70,9 +72,9 @@ let p0 = b.add_fixed_point(0.0, 0.0);  // nail this one down
 let p1 = b.add_fixed_point(10.0, 0.0); // and this one
 let p2 = b.add_point(5.0, 1.0);        // this one has to figure itself out
 
-b.constrain_distance(p0, p1, 10.0);
-b.constrain_distance(p1, p2, 8.0);
-b.constrain_distance(p2, p0, 6.0);
+b.constrain_distance(p0, p1, 10.0).unwrap();
+b.constrain_distance(p1, p2, 8.0).unwrap();
+b.constrain_distance(p2, p0, 6.0).unwrap();
 
 let mut system = b.build();
 let result = system.solve();
@@ -150,10 +152,10 @@ assert!(result.passed);
 |------|---------|--------------|
 | `std` | yes | Standard library support |
 | `macros` | yes | `#[auto_jacobian]` procedural macro via `solverang_macros` |
-| `sparse` | yes | Sparse matrix operations via `faer` |
-| `parallel` | yes | Parallel solving via `rayon` |
-| `jit` | yes | Cranelift-based JIT compilation for constraint evaluation |
-| `nist` | yes | NIST StRD nonlinear regression test problems |
+| `sparse` | no | Sparse matrix operations via `faer` |
+| `parallel` | no | Parallel solving via `rayon` |
+| `jit` | no | Cranelift-based JIT compilation for constraint evaluation |
+| `nist` | no | NIST StRD nonlinear regression test problems |
 
 ## Architecture
 
@@ -166,8 +168,8 @@ For the gory details, see `docs/plans/solver-first-v3.md`.
 ## Testing
 
 ```bash
-cargo test                    # everything (default features include all modules)
-cargo test -p solverang       # just the solver
+cargo test --all-features     # everything, including JIT/sparse/parallel/NIST
+cargo test                    # default features (core solver + macros)
 cargo test --features nist    # include NIST StRD validation
 ```
 

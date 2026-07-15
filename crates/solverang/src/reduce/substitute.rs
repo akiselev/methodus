@@ -6,16 +6,11 @@
 //! were eliminated so that higher-level code can skip them during solving.
 
 use crate::constraint::Constraint;
-use crate::id::ParamId;
 use crate::param::ParamStore;
 
 /// Result of fixed-parameter substitution analysis.
 #[derive(Clone, Debug)]
 pub struct SubstitutionResult {
-    /// Parameters that were identified as fixed and can be substituted out.
-    pub eliminated_params: Vec<ParamId>,
-    /// Total number of parameters removed from the solve.
-    pub params_removed: usize,
     /// Indices of constraints that are trivially satisfied (all params fixed,
     /// residual near zero).
     pub trivially_satisfied: Vec<usize>,
@@ -40,23 +35,12 @@ pub fn analyze_substitutions(
     constraints: &[&dyn Constraint],
     store: &ParamStore,
 ) -> SubstitutionResult {
-    let mut eliminated_params: Vec<ParamId> = Vec::new();
     let mut trivially_satisfied: Vec<usize> = Vec::new();
     let mut trivially_violated: Vec<usize> = Vec::new();
-
-    // Collect all fixed params that appear in any constraint.
-    let mut seen_fixed = std::collections::HashSet::new();
 
     for (idx, c) in constraints.iter().enumerate() {
         let params = c.param_ids();
         let all_fixed = params.iter().all(|&p| store.is_fixed(p));
-
-        // Track which fixed params we encounter.
-        for &p in params {
-            if store.is_fixed(p) && seen_fixed.insert(p) {
-                eliminated_params.push(p);
-            }
-        }
 
         if all_fixed {
             // All params are fixed -- evaluate the residual to see if the
@@ -71,57 +55,10 @@ pub fn analyze_substitutions(
         }
     }
 
-    let params_removed = eliminated_params.len();
-
     SubstitutionResult {
-        eliminated_params,
-        params_removed,
         trivially_satisfied,
         trivially_violated,
     }
-}
-
-/// Check if a constraint is trivially satisfied given the current fixed params.
-///
-/// Returns `true` if **all** parameters the constraint depends on are fixed
-/// and every residual component is within `tolerance` of zero.
-pub fn is_trivially_satisfied(
-    constraint: &dyn Constraint,
-    store: &ParamStore,
-    tolerance: f64,
-) -> bool {
-    let all_fixed = constraint.param_ids().iter().all(|&p| store.is_fixed(p));
-    if !all_fixed {
-        return false;
-    }
-    let residuals = constraint.residuals(store);
-    residuals.iter().all(|r| r.abs() < tolerance)
-}
-
-/// Check if a constraint is trivially violated given the current fixed params.
-///
-/// Returns `true` if **all** parameters the constraint depends on are fixed
-/// and at least one residual component exceeds `tolerance`.
-pub fn is_trivially_violated(
-    constraint: &dyn Constraint,
-    store: &ParamStore,
-    tolerance: f64,
-) -> bool {
-    let all_fixed = constraint.param_ids().iter().all(|&p| store.is_fixed(p));
-    if !all_fixed {
-        return false;
-    }
-    let residuals = constraint.residuals(store);
-    residuals.iter().any(|r| r.abs() >= tolerance)
-}
-
-/// Count how many free (non-fixed) parameters a constraint depends on.
-pub fn free_param_count(constraint: &dyn Constraint, store: &ParamStore) -> usize {
-    constraint
-        .param_ids()
-        .iter()
-        .filter(|&&p| !store.is_fixed(p))
-        .count()
 }
 
 #[cfg(test)]
@@ -177,8 +114,10 @@ mod tests {
             target: 5.0, // residual = 5.0 - 5.0 = 0
         };
 
-        assert!(is_trivially_satisfied(&c, &store, 1e-10));
-        assert!(!is_trivially_violated(&c, &store, 1e-10));
+        let constraints: Vec<&dyn Constraint> = vec![&c];
+        let result = analyze_substitutions(&constraints, &store);
+        assert_eq!(result.trivially_satisfied, vec![0]);
+        assert!(result.trivially_violated.is_empty());
     }
 
     #[test]
@@ -193,8 +132,10 @@ mod tests {
             target: 10.0, // residual = 5.0 - 10.0 = -5.0
         };
 
-        assert!(!is_trivially_satisfied(&c, &store, 1e-10));
-        assert!(is_trivially_violated(&c, &store, 1e-10));
+        let constraints: Vec<&dyn Constraint> = vec![&c];
+        let result = analyze_substitutions(&constraints, &store);
+        assert!(result.trivially_satisfied.is_empty());
+        assert_eq!(result.trivially_violated, vec![0]);
     }
 
     #[test]
@@ -209,7 +150,10 @@ mod tests {
             target: 5.0,
         };
 
-        assert!(!is_trivially_satisfied(&c, &store, 1e-10));
+        let constraints: Vec<&dyn Constraint> = vec![&c];
+        let result = analyze_substitutions(&constraints, &store);
+        assert!(result.trivially_satisfied.is_empty());
+        assert!(result.trivially_violated.is_empty());
     }
 
     #[test]
@@ -236,8 +180,6 @@ mod tests {
         let constraints: Vec<&dyn Constraint> = vec![&c1, &c2];
         let result = analyze_substitutions(&constraints, &store);
 
-        assert_eq!(result.eliminated_params.len(), 2);
-        assert_eq!(result.params_removed, 2);
         assert_eq!(result.trivially_satisfied, vec![0]);
         assert_eq!(result.trivially_violated, vec![1]);
     }
@@ -265,29 +207,8 @@ mod tests {
         let constraints: Vec<&dyn Constraint> = vec![&c1, &c2];
         let result = analyze_substitutions(&constraints, &store);
 
-        // Only p_fixed is eliminated.
-        assert_eq!(result.eliminated_params.len(), 1);
-        assert_eq!(result.eliminated_params[0], p_fixed);
         // Only c1 is trivially satisfied; c2 has a free param.
         assert_eq!(result.trivially_satisfied, vec![0]);
         assert!(result.trivially_violated.is_empty());
-    }
-
-    #[test]
-    fn test_free_param_count() {
-        let mut store = ParamStore::new();
-        let owner = dummy_owner();
-        let p = store.alloc(1.0, owner);
-
-        let c = FixValueConstraint {
-            id: ConstraintId::new(0, 0),
-            param: p,
-            target: 1.0,
-        };
-
-        assert_eq!(free_param_count(&c, &store), 1);
-
-        store.fix(p);
-        assert_eq!(free_param_count(&c, &store), 0);
     }
 }

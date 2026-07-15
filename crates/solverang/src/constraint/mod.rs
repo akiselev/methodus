@@ -57,11 +57,17 @@ pub trait Constraint: Send + Sync {
     fn jacobian(&self, store: &ParamStore) -> Vec<(usize, ParamId, f64)>;
 
     /// Weight for soft constraints (default 1.0).
+    ///
+    /// Reserved: no solver currently consumes weights — soft-constraint
+    /// support is planned but not yet implemented.
     fn weight(&self) -> f64 {
         1.0
     }
 
     /// Is this a soft constraint that can be relaxed?
+    ///
+    /// Reserved: no solver currently relaxes soft constraints — this flag is
+    /// recorded but not yet acted on.
     fn is_soft(&self) -> bool {
         false
     }

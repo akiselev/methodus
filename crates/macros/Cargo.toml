@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Procedural macros for automatic Jacobian generation via symbolic differentiation"
 license = "Apache-2.0"
+repository = "https://github.com/akiselev/solverang"
+rust-version = "1.85"
 
 [lib]
 proc-macro = true

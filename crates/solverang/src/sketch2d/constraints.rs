@@ -34,6 +34,7 @@ impl DistancePtPt {
     /// Create a distance constraint between two points.
     ///
     /// `distance` is the desired distance (not squared).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         e1: EntityId,
@@ -125,6 +126,7 @@ impl DistancePtLine {
     ///
     /// `point_entity` is the point, `line_entity` is the line segment.
     /// `distance` is the desired distance (not squared).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         point_entity: EntityId,
@@ -247,6 +249,7 @@ pub struct Coincident {
 }
 
 impl Coincident {
+    /// Create a coincidence constraint between two points' parameters.
     pub fn new(
         id: ConstraintId,
         e1: EntityId,
@@ -328,6 +331,7 @@ pub struct TangentLineCircle {
 
 impl TangentLineCircle {
     /// Create a tangent constraint between a line segment and a circle.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         line_entity: EntityId,
@@ -451,6 +455,7 @@ pub struct TangentCircleCircle {
 
 impl TangentCircleCircle {
     /// Create an external tangency constraint between two circles.
+    #[allow(clippy::too_many_arguments)]
     pub fn external(
         id: ConstraintId,
         e1: EntityId,
@@ -477,6 +482,7 @@ impl TangentCircleCircle {
     }
 
     /// Create an internal tangency constraint between two circles.
+    #[allow(clippy::too_many_arguments)]
     pub fn internal(
         id: ConstraintId,
         e1: EntityId,
@@ -581,6 +587,7 @@ impl Parallel {
     /// Create a parallel constraint between two line segments.
     ///
     /// Line 1: `(x1,y1)` to `(x2,y2)`, Line 2: `(x3,y3)` to `(x4,y4)`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         line1: EntityId,
@@ -679,6 +686,7 @@ pub struct Perpendicular {
 
 impl Perpendicular {
     /// Create a perpendicular constraint between two line segments.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         line1: EntityId,
@@ -853,6 +861,7 @@ pub struct Horizontal {
 }
 
 impl Horizontal {
+    /// Create a horizontal constraint: the two points share a y coordinate.
     pub fn new(id: ConstraintId, e1: EntityId, e2: EntityId, y1: ParamId, y2: ParamId) -> Self {
         Self {
             id,
@@ -907,6 +916,7 @@ pub struct Vertical {
 }
 
 impl Vertical {
+    /// Create a vertical constraint: the two points share an x coordinate.
     pub fn new(id: ConstraintId, e1: EntityId, e2: EntityId, x1: ParamId, x2: ParamId) -> Self {
         Self {
             id,
@@ -963,6 +973,7 @@ pub struct Fixed {
 }
 
 impl Fixed {
+    /// Create a fixed-position constraint pinning a point at `(tx, ty)`.
     pub fn new(
         id: ConstraintId,
         entity: EntityId,
@@ -1031,6 +1042,7 @@ pub struct Midpoint {
 
 impl Midpoint {
     /// `point_entity` is the midpoint, `line_entity` is the line segment.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         point_entity: EntityId,
@@ -1113,6 +1125,7 @@ pub struct Symmetric {
 
 impl Symmetric {
     /// `p1` and `p2` are the symmetric pair, `center` is the center of symmetry.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         p1: EntityId,
@@ -1199,6 +1212,7 @@ pub struct EqualLength {
 
 impl EqualLength {
     /// Create an equal-length constraint between two line segments.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         line1: EntityId,
@@ -1292,6 +1306,8 @@ pub struct PointOnCircle {
 }
 
 impl PointOnCircle {
+    /// Create a point-on-circle constraint: the point lies on the circle.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         point_entity: EntityId,
@@ -1431,6 +1447,7 @@ pub struct Collinear {
 
 impl Collinear {
     /// Create a collinearity constraint on three points.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         e1: EntityId,
@@ -1542,6 +1559,7 @@ pub struct SymmetricAboutLine {
 impl SymmetricAboutLine {
     /// `p1`, `p2` are the symmetric pair; `line` is the mirror line entity
     /// with endpoints A = (ax, ay) and B = (bx, by).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ConstraintId,
         p1: EntityId,

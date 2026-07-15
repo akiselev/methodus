@@ -2,7 +2,7 @@
 
 #![cfg(feature = "macros")]
 
-use solverang::{auto_diff, hessian, objective};
+use solverang::auto_diff;
 
 // =========================================================================
 // Test 1: Quadratic with known exact Hessian
@@ -133,6 +133,7 @@ impl GradientOnly {
 #[test]
 fn gradient_only_no_hessian() {
     let g = GradientOnly;
+    assert!((g.value(&[3.0]) - 9.0).abs() < 1e-15);
     let grad = g.gradient_entries(&[3.0]);
     assert_eq!(grad.len(), 1);
     let (idx, val) = grad[0];

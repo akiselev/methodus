@@ -154,8 +154,8 @@ impl Problem for DenseNonlinearProblem {
 
         for i in 0..n {
             let mut sum = 0.0;
-            for j in 0..n {
-                sum += x[j] * ((i + j + 2) as f64) / ((j + 1) as f64);
+            for (j, xj) in x.iter().enumerate() {
+                sum += xj * ((i + j + 2) as f64) / ((j + 1) as f64);
             }
             r.push(sum - (i as f64 + 1.0));
         }
@@ -183,11 +183,13 @@ impl Problem for DenseNonlinearProblem {
 }
 
 /// Multi-component problem - k independent sub-problems.
+#[cfg(feature = "parallel")]
 struct MultiComponentProblem {
     components: usize,
     vars_per_component: usize,
 }
 
+#[cfg(feature = "parallel")]
 impl Problem for MultiComponentProblem {
     fn name(&self) -> &str {
         "multi-component"
@@ -235,6 +237,7 @@ impl Problem for MultiComponentProblem {
     }
 }
 
+#[cfg(feature = "parallel")]
 impl DecomposableProblem for MultiComponentProblem {
     fn constraint_graph(&self) -> Vec<(usize, usize)> {
         let mut graph = Vec::new();
@@ -282,7 +285,7 @@ impl Problem for RosenbrockProblem {
     }
 
     fn initial_point(&self, factor: f64) -> Vec<f64> {
-        vec![-1.0 * factor, 1.0 * factor]
+        vec![-factor, 1.0 * factor]
     }
 }
 

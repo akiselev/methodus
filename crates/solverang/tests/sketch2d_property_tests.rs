@@ -1073,11 +1073,11 @@ proptest! {
         let dof_before = b.system().degrees_of_freedom();
 
         // Add one distance constraint
-        b.constrain_distance(p0, p1, dist);
+        b.constrain_distance(p0, p1, dist).unwrap();
         let dof_after_1 = b.system().degrees_of_freedom();
 
         // Add another
-        b.constrain_distance(p1, p2, dist);
+        b.constrain_distance(p1, p2, dist).unwrap();
         let dof_after_2 = b.system().degrees_of_freedom();
 
         prop_assert!(
@@ -1106,7 +1106,7 @@ proptest! {
 
         let dof_before = b.system().degrees_of_freedom();
 
-        b.constrain_coincident(p0, p1);
+        b.constrain_coincident(p0, p1).unwrap();
         let dof_after = b.system().degrees_of_freedom();
 
         prop_assert!(
@@ -1130,7 +1130,7 @@ proptest! {
 
         let dof_before = b.system().degrees_of_freedom();
 
-        b.constrain_horizontal(p0, p1);
+        b.constrain_horizontal(p0, p1).unwrap();
         let dof_after = b.system().degrees_of_freedom();
 
         prop_assert!(
@@ -1153,7 +1153,7 @@ proptest! {
 
         let dof_before = b.system().degrees_of_freedom();
 
-        b.constrain_fixed(p, tx, ty);
+        b.constrain_fixed(p, tx, ty).unwrap();
         let dof_after = b.system().degrees_of_freedom();
 
         prop_assert_eq!(
@@ -1179,13 +1179,13 @@ proptest! {
             points.push(b.add_point(i as f64 * 2.0, i as f64));
         }
 
-        for i in 0..n_fixed.min(n_points) {
-            b.fix_entity(points[i]);
+        for &p in points.iter().take(n_fixed.min(n_points)) {
+            b.fix_entity(p).unwrap();
         }
 
         let max_dist = if n_points > 1 { n_dist.min(n_points - 1) } else { 0 };
         for i in 0..max_dist {
-            b.constrain_distance(points[i], points[i + 1], 1.0);
+            b.constrain_distance(points[i], points[i + 1], 1.0).unwrap();
         }
 
         let sys = b.system();
@@ -1223,8 +1223,8 @@ proptest! {
         let p2 = b.add_point(x3, y3);
         let p3 = b.add_point(x4, y4);
 
-        b.constrain_distance(p0, p1, d1);
-        b.constrain_distance(p2, p3, d2);
+        b.constrain_distance(p0, p1, d1).unwrap();
+        b.constrain_distance(p2, p3, d2).unwrap();
 
         let mut sys = b.build();
         let result = sys.solve();
@@ -1254,8 +1254,8 @@ proptest! {
         let p2 = b.add_point(x2, y2);
 
         // p0-p1 and p1-p2 share point p1 => single cluster
-        b.constrain_distance(p0, p1, d1);
-        b.constrain_distance(p1, p2, d2);
+        b.constrain_distance(p0, p1, d1).unwrap();
+        b.constrain_distance(p1, p2, d2).unwrap();
 
         let mut sys = b.build();
         let result = sys.solve();
@@ -1702,9 +1702,9 @@ proptest! {
         let p1 = b.add_fixed_point(side1, 0.0);
         let p2 = b.add_point(side1 / 2.0, side2.max(side3) / 2.0);
 
-        b.constrain_distance(p0, p1, side1);
-        b.constrain_distance(p1, p2, side2);
-        b.constrain_distance(p2, p0, side3);
+        b.constrain_distance(p0, p1, side1).unwrap();
+        b.constrain_distance(p1, p2, side2).unwrap();
+        b.constrain_distance(p2, p0, side3).unwrap();
 
         let mut sys = b.build();
         let result = sys.solve();
@@ -1748,30 +1748,30 @@ proptest! {
         // 4 free points = 8 free params
         prop_assert_eq!(b.system().degrees_of_freedom(), 8);
 
-        let l01 = b.add_line_segment(p0, p1);
-        let l12 = b.add_line_segment(p1, p2);
-        let l23 = b.add_line_segment(p2, p3);
-        let l30 = b.add_line_segment(p3, p0);
+        let l01 = b.add_line_segment(p0, p1).unwrap();
+        let l12 = b.add_line_segment(p1, p2).unwrap();
+        let l23 = b.add_line_segment(p2, p3).unwrap();
+        let l30 = b.add_line_segment(p3, p0).unwrap();
 
         // Line entities share params, DOF unchanged
         prop_assert_eq!(b.system().degrees_of_freedom(), 8);
 
         // 4 distance constraints: -4 DOF
-        b.constrain_distance(p0, p1, width);
-        b.constrain_distance(p1, p2, height);
-        b.constrain_distance(p2, p3, width);
-        b.constrain_distance(p3, p0, height);
+        b.constrain_distance(p0, p1, width).unwrap();
+        b.constrain_distance(p1, p2, height).unwrap();
+        b.constrain_distance(p2, p3, width).unwrap();
+        b.constrain_distance(p3, p0, height).unwrap();
 
         prop_assert_eq!(b.system().degrees_of_freedom(), 4);
 
         // 2 perpendicular constraints: -2 DOF
-        b.constrain_perpendicular(l01, l12);
-        b.constrain_perpendicular(l12, l23);
+        b.constrain_perpendicular(l01, l12).unwrap();
+        b.constrain_perpendicular(l12, l23).unwrap();
 
         prop_assert_eq!(b.system().degrees_of_freedom(), 2);
 
         // Fixing one point: -2 DOF
-        b.fix_entity(p0);
+        b.fix_entity(p0).unwrap();
 
         prop_assert_eq!(b.system().degrees_of_freedom(), 0);
 
@@ -1795,7 +1795,7 @@ proptest! {
 
         let max_dist = n_dist.min(n_points - 1);
         for i in 0..max_dist {
-            b.constrain_distance(points[i], points[i + 1], 3.0);
+            b.constrain_distance(points[i], points[i + 1], 3.0).unwrap();
         }
 
         let sys = b.system();

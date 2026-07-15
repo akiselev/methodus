@@ -134,7 +134,7 @@ fn bfgs_1d_quadratic_converges() {
     let obj = Quadratic1D { param: px };
     let config = OptimizationConfig::default();
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     assert!(
@@ -155,11 +155,13 @@ fn bfgs_rosenbrock_converges() {
     let py = store.alloc(1.0, owner);
 
     let obj = Rosenbrock::new(px, py);
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 2000; // Rosenbrock needs more iterations
-    config.dual_tolerance = 1e-6;
+    let config = OptimizationConfig {
+        max_outer_iterations: 2000, // Rosenbrock needs more iterations
+        dual_tolerance: 1e-6,
+        ..Default::default()
+    };
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -186,7 +188,7 @@ fn bfgs_nd_quadratic_converges() {
     };
     let config = OptimizationConfig::default();
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     for (i, &p) in params.iter().enumerate() {
@@ -215,11 +217,13 @@ fn wolfe_rosenbrock_converges() {
     let py = store.alloc(1.0, owner);
 
     let obj = Rosenbrock::new(px, py);
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 2000;
-    config.dual_tolerance = 1e-6;
+    let config = OptimizationConfig {
+        max_outer_iterations: 2000,
+        dual_tolerance: 1e-6,
+        ..Default::default()
+    };
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -248,7 +252,7 @@ fn wolfe_10d_quadratic_iteration_count() {
     };
     let config = OptimizationConfig::default();
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     assert!(
@@ -286,7 +290,7 @@ fn bfgs_2d_quadratic_relative_tolerance_converges() {
     let config = OptimizationConfig::default();
     assert!(config.relative_tolerance, "default should be relative");
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     for (i, &p) in params.iter().enumerate() {
@@ -310,10 +314,12 @@ fn bfgs_absolute_tolerance_backward_compat() {
     let px = store.alloc(0.0, owner);
 
     let obj = Quadratic1D { param: px };
-    let mut config = OptimizationConfig::default();
-    config.relative_tolerance = false;
+    let config = OptimizationConfig {
+        relative_tolerance: false,
+        ..Default::default()
+    };
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     let x = store.get(px);
@@ -330,7 +336,7 @@ fn bfgs_already_at_minimum() {
     let obj = Quadratic1D { param: px };
     let config = OptimizationConfig::default();
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     assert_eq!(result.outer_iterations, 0); // should detect immediately
@@ -347,7 +353,7 @@ fn bfgs_zero_variables() {
     let obj = Quadratic1D { param: px };
     let config = OptimizationConfig::default();
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     assert_eq!(result.outer_iterations, 0);
@@ -428,13 +434,15 @@ fn alm_rosenbrock_with_linear_constraint() {
     let constraint = LinearEqualityConstraint::new(cid, px, py, 1.0);
     let constraints: Vec<&dyn Constraint> = vec![&constraint];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 50;
-    config.max_inner_iterations = 500;
-    config.outer_tolerance = 1e-5;
-    config.dual_tolerance = 1e-4;
+    let config = OptimizationConfig {
+        max_outer_iterations: 50,
+        max_inner_iterations: 500,
+        outer_tolerance: 1e-5,
+        dual_tolerance: 1e-4,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &constraints, &[], &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -519,7 +527,7 @@ fn alm_quadratic_with_constraint() {
     let constraints: Vec<&dyn Constraint> = vec![&constraint];
 
     let config = OptimizationConfig::default();
-    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &constraints, &[], &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -595,7 +603,7 @@ fn alm_already_feasible() {
     let constraints: Vec<&dyn Constraint> = vec![&constraint];
 
     let config = OptimizationConfig::default();
-    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &constraints, &[], &mut store, None);
 
     // Should converge quickly — already at the optimum
     assert!(result.status.is_converged());
@@ -654,7 +662,7 @@ fn bfgs_b_bounded_quadratic() {
     let obj = BoundedQuad { params: [px, py] };
     let config = OptimizationConfig::default();
 
-    let result = BfgsBSolver::solve(&obj, &mut store, &config);
+    let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -689,11 +697,13 @@ fn bfgs_b_unconstrained_matches_bfgs() {
     // BfgsB with no active bounds converges identically to unconstrained BFGS.
 
     let obj = Rosenbrock::new(px, py);
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 2000;
-    config.dual_tolerance = 1e-6;
+    let config = OptimizationConfig {
+        max_outer_iterations: 2000,
+        dual_tolerance: 1e-6,
+        ..Default::default()
+    };
 
-    let result = BfgsBSolver::solve(&obj, &mut store, &config);
+    let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -747,7 +757,7 @@ fn bfgs_b_all_bounds_active() {
     let obj5 = QuadTarget5 { param: px };
     let config = OptimizationConfig::default();
 
-    let result = BfgsBSolver::solve(&obj5, &mut store, &config);
+    let result = BfgsBSolver::new(config.clone()).solve(&obj5, &mut store);
 
     assert_eq!(
         result.status,
@@ -871,11 +881,13 @@ fn alm_inequality_inactive() {
     let ineq = LinearInequalityConstraint::new(hid, px, py, 1.0, 1.0, 5.0);
     let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 50;
-    config.max_inner_iterations = 500;
+    let config = OptimizationConfig {
+        max_outer_iterations: 50,
+        max_inner_iterations: 500,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &[], &inequalities, &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &[], &inequalities, &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -922,13 +934,15 @@ fn alm_inequality_active() {
     let ineq = LinearInequalityConstraint::new(hid, px, py, 1.0, 1.0, 3.0);
     let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 100;
-    config.max_inner_iterations = 500;
-    config.outer_tolerance = 1e-4;
-    config.dual_tolerance = 1e-3;
+    let config = OptimizationConfig {
+        max_outer_iterations: 100,
+        max_inner_iterations: 500,
+        outer_tolerance: 1e-4,
+        dual_tolerance: 1e-3,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &[], &inequalities, &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &[], &inequalities, &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -1035,13 +1049,16 @@ fn alm_mixed_equality_inequality() {
     let ineq = NonNegativityConstraint { id: hid, param: px };
     let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 50;
-    config.max_inner_iterations = 500;
-    config.outer_tolerance = 1e-4;
-    config.dual_tolerance = 1e-4;
+    let config = OptimizationConfig {
+        max_outer_iterations: 50,
+        max_inner_iterations: 500,
+        outer_tolerance: 1e-4,
+        dual_tolerance: 1e-4,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &constraints, &inequalities, &mut store, &config, None);
+    let result =
+        AlmSolver::new(config.clone()).solve(&obj, &constraints, &inequalities, &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -1090,12 +1107,14 @@ fn trust_region_rosenbrock_converges() {
     let py = store.alloc(1.0, owner);
 
     let obj = Rosenbrock::new(px, py);
-    let mut config = OptimizationConfig::default();
-    config.algorithm = OptimizationAlgorithm::TrustRegion;
-    config.max_outer_iterations = 2000;
-    config.dual_tolerance = 1e-6;
+    let config = OptimizationConfig {
+        algorithm: OptimizationAlgorithm::TrustRegion,
+        max_outer_iterations: 2000,
+        dual_tolerance: 1e-6,
+        ..Default::default()
+    };
 
-    let result = TrustRegionSolver::solve(&obj, &mut store, &config);
+    let result = TrustRegionSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -1121,10 +1140,12 @@ fn trust_region_10d_quadratic() {
     let obj = QuadraticND {
         params: params.clone(),
     };
-    let mut config = OptimizationConfig::default();
-    config.algorithm = OptimizationAlgorithm::TrustRegion;
+    let config = OptimizationConfig {
+        algorithm: OptimizationAlgorithm::TrustRegion,
+        ..Default::default()
+    };
 
-    let result = TrustRegionSolver::solve(&obj, &mut store, &config);
+    let result = TrustRegionSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -1159,7 +1180,7 @@ fn bfgs_50d_quadratic_relative_tolerance_converges() {
     let config = OptimizationConfig::default();
     assert!(config.relative_tolerance, "default should be relative");
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -1192,10 +1213,12 @@ fn trust_region_200d_steihaug_cg_path() {
     let obj = QuadraticND {
         params: params.clone(),
     };
-    let mut config = OptimizationConfig::default();
-    config.algorithm = OptimizationAlgorithm::TrustRegion;
+    let config = OptimizationConfig {
+        algorithm: OptimizationAlgorithm::TrustRegion,
+        ..Default::default()
+    };
 
-    let result = TrustRegionSolver::solve(&obj, &mut store, &config);
+    let result = TrustRegionSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -1266,12 +1289,14 @@ fn trust_region_beale_converges() {
     let py = store.alloc(0.0, owner);
 
     let obj = Beale { params: [px, py] };
-    let mut config = OptimizationConfig::default();
-    config.algorithm = OptimizationAlgorithm::TrustRegion;
-    config.max_outer_iterations = 2000;
-    config.dual_tolerance = 1e-6;
+    let config = OptimizationConfig {
+        algorithm: OptimizationAlgorithm::TrustRegion,
+        max_outer_iterations: 2000,
+        dual_tolerance: 1e-6,
+        ..Default::default()
+    };
 
-    let result = TrustRegionSolver::solve(&obj, &mut store, &config);
+    let result = TrustRegionSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -1294,10 +1319,12 @@ fn trust_region_already_at_minimum() {
     let px = store.alloc(3.0, owner); // minimum of (x - 3)^2
 
     let obj = Quadratic1D { param: px };
-    let mut config = OptimizationConfig::default();
-    config.algorithm = OptimizationAlgorithm::TrustRegion;
+    let config = OptimizationConfig {
+        algorithm: OptimizationAlgorithm::TrustRegion,
+        ..Default::default()
+    };
 
-    let result = TrustRegionSolver::solve(&obj, &mut store, &config);
+    let result = TrustRegionSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     assert_eq!(
@@ -1332,13 +1359,15 @@ fn alm_bounded_quadratic_with_equality() {
     let eq = LinearEqualityConstraint::new(cid, px, py, 6.0);
     let constraints: Vec<&dyn Constraint> = vec![&eq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 100;
-    config.max_inner_iterations = 500;
-    config.outer_tolerance = 1e-4;
-    config.dual_tolerance = 1e-4;
+    let config = OptimizationConfig {
+        max_outer_iterations: 100,
+        max_inner_iterations: 500,
+        outer_tolerance: 1e-4,
+        dual_tolerance: 1e-4,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &constraints, &[], &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -1380,13 +1409,15 @@ fn alm_bounded_inequality_active() {
     let ineq = LinearInequalityConstraint::new(hid, px, py, 1.0, 1.0, 2.0);
     let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 100;
-    config.max_inner_iterations = 500;
-    config.outer_tolerance = 1e-4;
-    config.dual_tolerance = 1e-3;
+    let config = OptimizationConfig {
+        max_outer_iterations: 100,
+        max_inner_iterations: 500,
+        outer_tolerance: 1e-4,
+        dual_tolerance: 1e-3,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &[], &inequalities, &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &[], &inequalities, &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -1461,13 +1492,16 @@ fn alm_bounded_equality_and_inequality() {
     };
     let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 100;
-    config.max_inner_iterations = 500;
-    config.outer_tolerance = 1e-4;
-    config.dual_tolerance = 1e-3;
+    let config = OptimizationConfig {
+        max_outer_iterations: 100,
+        max_inner_iterations: 500,
+        outer_tolerance: 1e-4,
+        dual_tolerance: 1e-3,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &constraints, &inequalities, &mut store, &config, None);
+    let result =
+        AlmSolver::new(config.clone()).solve(&obj, &constraints, &inequalities, &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -1506,11 +1540,13 @@ fn alm_warm_start_reduces_iterations() {
 
     let cid = ConstraintId::new(0, 0);
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 100;
-    config.max_inner_iterations = 500;
-    config.outer_tolerance = 1e-5;
-    config.dual_tolerance = 1e-4;
+    let config = OptimizationConfig {
+        max_outer_iterations: 100,
+        max_inner_iterations: 500,
+        outer_tolerance: 1e-5,
+        dual_tolerance: 1e-4,
+        ..Default::default()
+    };
 
     // First solve — cold start.
     let (mut store1, px1, py1) = mk_store(owner);
@@ -1520,7 +1556,7 @@ fn alm_warm_start_reduces_iterations() {
     };
     let eq1 = LinearEqualityConstraint::new(cid, px1, py1, 5.0);
     let c1: Vec<&dyn Constraint> = vec![&eq1];
-    let result1 = AlmSolver::solve(&obj1, &c1, &[], &mut store1, &config, None);
+    let result1 = AlmSolver::new(config.clone()).solve(&obj1, &c1, &[], &mut store1, None);
     assert!(
         result1.status.is_converged(),
         "first solve did not converge"
@@ -1535,13 +1571,12 @@ fn alm_warm_start_reduces_iterations() {
     let eq2 = LinearEqualityConstraint::new(cid, px2, py2, 5.0);
     let c2: Vec<&dyn Constraint> = vec![&eq2];
     let mut warm_config = config.clone();
-    warm_config.multiplier_init = MultiplierInitStrategy::WarmStart;
-    let result2 = AlmSolver::solve(
+    warm_config.alm.multiplier_init = MultiplierInitStrategy::WarmStart;
+    let result2 = AlmSolver::new(warm_config.clone()).solve(
         &obj2,
         &c2,
         &[],
         &mut store2,
-        &warm_config,
         Some(&result1.multipliers),
     );
     assert!(
@@ -1575,16 +1610,20 @@ fn alm_warm_start_empty_store_falls_back() {
     let eq = LinearEqualityConstraint::new(cid, px, py, 5.0);
     let constraints: Vec<&dyn Constraint> = vec![&eq];
 
-    let mut config = OptimizationConfig::default();
-    config.multiplier_init = MultiplierInitStrategy::WarmStart;
+    let config = OptimizationConfig {
+        alm: solverang::optimization::AlmConfig {
+            multiplier_init: MultiplierInitStrategy::WarmStart,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
     let empty_store = MultiplierStore::new();
-    let result = AlmSolver::solve(
+    let result = AlmSolver::new(config.clone()).solve(
         &obj,
         &constraints,
         &[],
         &mut store,
-        &config,
         Some(&empty_store),
     );
 
@@ -1619,11 +1658,13 @@ fn bfgs_b_gcp_rosenbrock_bounded() {
     store.set_bounds(py, 0.0, 10.0);
 
     let obj = Rosenbrock::new(px, py);
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 2000;
-    config.dual_tolerance = 1e-5;
+    let config = OptimizationConfig {
+        max_outer_iterations: 2000,
+        dual_tolerance: 1e-5,
+        ..Default::default()
+    };
 
-    let result = BfgsBSolver::solve(&obj, &mut store, &config);
+    let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -1661,7 +1702,7 @@ fn bfgs_b_gcp_tight_bounds_corner() {
     };
     let config = OptimizationConfig::default();
 
-    let result = BfgsBSolver::solve(&obj, &mut store, &config);
+    let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     let x = store.get(px);
@@ -1686,7 +1727,7 @@ fn bfgs_b_gcp_interior_solution() {
     };
     let config = OptimizationConfig::default();
 
-    let result = BfgsBSolver::solve(&obj, &mut store, &config);
+    let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     let x = store.get(px);
@@ -1730,7 +1771,7 @@ fn bfgs_b_gcp_one_sided_lower_bounds() {
     let obj = QuadAt3 { param: px };
     let config = OptimizationConfig::default();
 
-    let result = BfgsBSolver::solve(&obj, &mut store, &config);
+    let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     let x = store.get(px);
@@ -1814,11 +1855,13 @@ fn trust_region_exact_hessian_rosenbrock() {
     let py = store.alloc(1.0, owner);
 
     let obj = RosenbrockWithHessian::new(px, py);
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 2000;
-    config.dual_tolerance = 1e-6;
+    let config = OptimizationConfig {
+        max_outer_iterations: 2000,
+        dual_tolerance: 1e-6,
+        ..Default::default()
+    };
 
-    let result = TrustRegionSolver::solve_with_hessian(&obj, &mut store, &config);
+    let result = TrustRegionSolver::new(config.clone()).solve_with_hessian(&obj, &mut store);
 
     assert_eq!(
         result.status,
@@ -1882,10 +1925,15 @@ fn trust_region_exact_hessian_quadratic_1step() {
         params: [px, py],
         target: [2.0, 3.0],
     };
-    let mut config = OptimizationConfig::default();
-    config.trust_region_init = 100.0; // large enough to accept Newton step
+    let config = OptimizationConfig {
+        trust_region: solverang::optimization::TrustRegionConfig {
+            initial_radius: 100.0, // large enough to accept Newton step
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
-    let result = TrustRegionSolver::solve_with_hessian(&obj, &mut store, &config);
+    let result = TrustRegionSolver::new(config.clone()).solve_with_hessian(&obj, &mut store);
 
     assert_eq!(result.status, OptimizationStatus::Converged);
     let x = store.get(px);
@@ -1921,10 +1969,12 @@ fn alm_contradictory_constraints_report_infeasible() {
     let c2 = LinearEqualityConstraint::new(ConstraintId::new(1, 0), px, py, 3.0);
     let constraints: Vec<&dyn Constraint> = vec![&c1, &c2];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 200;
+    let config = OptimizationConfig {
+        max_outer_iterations: 200,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &constraints, &[], &mut store, None);
 
     assert!(
         matches!(
@@ -1957,7 +2007,7 @@ fn alm_zero_free_variables_checks_feasibility() {
     let constraints: Vec<&dyn Constraint> = vec![&c];
 
     let config = OptimizationConfig::default();
-    let result = AlmSolver::solve(&obj, &constraints, &[], &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &constraints, &[], &mut store, None);
 
     assert_eq!(
         result.status,
@@ -1978,7 +2028,8 @@ fn alm_zero_free_variables_checks_feasibility() {
     };
     let c2 = LinearEqualityConstraint::new(ConstraintId::new(0, 0), px2, py2, 5.0);
     let constraints2: Vec<&dyn Constraint> = vec![&c2];
-    let result2 = AlmSolver::solve(&obj2, &constraints2, &[], &mut store2, &config, None);
+    let result2 =
+        AlmSolver::new(config.clone()).solve(&obj2, &constraints2, &[], &mut store2, None);
     assert_eq!(result2.status, OptimizationStatus::Converged);
 }
 
@@ -1998,10 +2049,12 @@ fn alm_inequality_only_grows_penalty_and_converges() {
     let ineq = LinearInequalityConstraint::new(ConstraintId::new(0, 0), px, py, 1.0, 0.0, 1.0);
     let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 100;
+    let config = OptimizationConfig {
+        max_outer_iterations: 100,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &[], &inequalities, &mut store, &config, None);
+    let result = AlmSolver::new(config.clone()).solve(&obj, &[], &inequalities, &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -2050,10 +2103,13 @@ fn alm_mixed_bounds_equalities_inequalities() {
     let ineq = LinearInequalityConstraint::new(ConstraintId::new(1, 0), px, py, 1.0, 0.0, 2.0);
     let inequalities: Vec<&dyn InequalityFn> = vec![&ineq];
 
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = 100;
+    let config = OptimizationConfig {
+        max_outer_iterations: 100,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &constraints, &inequalities, &mut store, &config, None);
+    let result =
+        AlmSolver::new(config.clone()).solve(&obj, &constraints, &inequalities, &mut store, None);
 
     assert!(
         result.status.is_converged(),
@@ -2101,11 +2157,17 @@ fn alm_warm_started_negative_inequality_multiplier_is_clamped() {
     let mut warm = MultiplierStore::new();
     warm.set(solverang::optimization::MultiplierId::new(cid, 0), -50.0);
 
-    let mut config = OptimizationConfig::default();
-    config.multiplier_init = MultiplierInitStrategy::WarmStart;
-    config.max_outer_iterations = 100;
+    let config = OptimizationConfig {
+        alm: solverang::optimization::AlmConfig {
+            multiplier_init: MultiplierInitStrategy::WarmStart,
+            ..Default::default()
+        },
+        max_outer_iterations: 100,
+        ..Default::default()
+    };
 
-    let result = AlmSolver::solve(&obj, &[], &inequalities, &mut store, &config, Some(&warm));
+    let result =
+        AlmSolver::new(config.clone()).solve(&obj, &[], &inequalities, &mut store, Some(&warm));
 
     assert!(
         result.status.is_converged(),

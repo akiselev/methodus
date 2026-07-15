@@ -33,11 +33,13 @@ fn solve_via_bfgs(
         param_ids.clone(),
         ObjectiveId::new(0, 0),
     );
-    let mut config = OptimizationConfig::default();
-    config.max_outer_iterations = max_iter;
-    config.dual_tolerance = tolerance;
+    let config = OptimizationConfig {
+        max_outer_iterations: max_iter,
+        dual_tolerance: tolerance,
+        ..Default::default()
+    };
 
-    let result = BfgsSolver::solve(&obj, &mut store, &config);
+    let result = BfgsSolver::new(config.clone()).solve(&obj, &mut store);
     let solution: Vec<f64> = param_ids.iter().map(|&pid| store.get(pid)).collect();
     (result.status, result.objective_value, solution)
 }

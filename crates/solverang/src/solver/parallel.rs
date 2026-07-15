@@ -14,10 +14,10 @@ use crate::decomposition::{decompose, Component, ComponentId, DecomposableProble
 use crate::problem::Problem;
 use crate::solver::auto::SolverChoice;
 use crate::solver::config::SolverConfig;
-use crate::solver::levenberg_marquardt::LMSolver;
 use crate::solver::lm_config::LMConfig;
-use crate::solver::newton_raphson::Solver as NRSolver;
-use crate::solver::result::{SolveError, SolveResult};
+#[cfg(test)]
+use crate::solver::result::SolveError;
+use crate::solver::result::SolveResult;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -88,8 +88,6 @@ impl ParallelSolverConfig {
 /// Result from solving a single component.
 #[derive(Clone, Debug)]
 struct ComponentResult {
-    #[allow(dead_code)]
-    component_id: ComponentId,
     result: SolveResult,
     sub_problem: SubProblem,
 }
@@ -138,29 +136,8 @@ impl ParallelSolver {
     /// which are solved in parallel (if the `parallel` feature is enabled
     /// and there are enough components).
     pub fn solve<P: DecomposableProblem>(&self, problem: &P, x0: &[f64]) -> SolveResult {
-        let variable_count = problem.variable_count();
-        let residual_count = problem.residual_count();
-
-        // Validate dimensions
-        if variable_count == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoVariables,
-            };
-        }
-
-        if residual_count == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoEquations,
-            };
-        }
-
-        if x0.len() != variable_count {
-            return SolveResult::Failed {
-                error: SolveError::DimensionMismatch {
-                    expected: variable_count,
-                    got: x0.len(),
-                },
-            };
+        if let Err(error) = super::common::validate_problem(problem, x0) {
+            return error.into();
         }
 
         // Decompose the problem
@@ -218,28 +195,8 @@ impl ParallelSolver {
         x0: &[f64],
         changed_components: &[ComponentId],
     ) -> SolveResult {
-        let variable_count = problem.variable_count();
-        let residual_count = problem.residual_count();
-
-        if variable_count == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoVariables,
-            };
-        }
-
-        if residual_count == 0 {
-            return SolveResult::Failed {
-                error: SolveError::NoEquations,
-            };
-        }
-
-        if x0.len() != variable_count {
-            return SolveResult::Failed {
-                error: SolveError::DimensionMismatch {
-                    expected: variable_count,
-                    got: x0.len(),
-                },
-            };
+        if let Err(error) = super::common::validate_problem(problem, x0) {
+            return error.into();
         }
 
         if changed_components.is_empty() {
@@ -307,28 +264,13 @@ impl ParallelSolver {
 
     /// Solve a problem with a single component (no decomposition benefit).
     fn solve_single_component<P: Problem>(&self, problem: &P, x0: &[f64]) -> SolveResult {
-        match self.config.inner_solver {
-            SolverChoice::NewtonRaphson => {
-                let solver = NRSolver::new(self.config.nr_config.clone());
-                solver.solve(problem, x0)
-            }
-            SolverChoice::LevenbergMarquardt => {
-                let solver = LMSolver::new(self.config.lm_config.clone());
-                solver.solve(problem, x0)
-            }
-            SolverChoice::Auto => {
-                // Auto-select based on problem characteristics
-                let m = problem.residual_count();
-                let n = problem.variable_count();
-                if m == n {
-                    let solver = NRSolver::new(self.config.nr_config.clone());
-                    solver.solve(problem, x0)
-                } else {
-                    let solver = LMSolver::new(self.config.lm_config.clone());
-                    solver.solve(problem, x0)
-                }
-            }
-        }
+        super::common::solve_with_choice(
+            self.config.inner_solver,
+            &self.config.nr_config,
+            &self.config.lm_config,
+            problem,
+            x0,
+        )
     }
 
     /// Solve components sequentially.
@@ -381,7 +323,6 @@ impl ParallelSolver {
         // Handle empty or trivial components
         if component.is_empty() || component.has_no_variables() {
             return ComponentResult {
-                component_id: component.id,
                 result: SolveResult::Converged {
                     solution: sub_x0,
                     iterations: 0,
@@ -398,30 +339,15 @@ impl ParallelSolver {
         };
 
         // Solve the component
-        let result = match self.config.inner_solver {
-            SolverChoice::NewtonRaphson => {
-                let solver = NRSolver::new(self.config.nr_config.clone());
-                solver.solve(&component_problem, &sub_x0)
-            }
-            SolverChoice::LevenbergMarquardt => {
-                let solver = LMSolver::new(self.config.lm_config.clone());
-                solver.solve(&component_problem, &sub_x0)
-            }
-            SolverChoice::Auto => {
-                let m = component_problem.residual_count();
-                let n = component_problem.variable_count();
-                if m == n {
-                    let solver = NRSolver::new(self.config.nr_config.clone());
-                    solver.solve(&component_problem, &sub_x0)
-                } else {
-                    let solver = LMSolver::new(self.config.lm_config.clone());
-                    solver.solve(&component_problem, &sub_x0)
-                }
-            }
-        };
+        let result = super::common::solve_with_choice(
+            self.config.inner_solver,
+            &self.config.nr_config,
+            &self.config.lm_config,
+            &component_problem,
+            &sub_x0,
+        );
 
         ComponentResult {
-            component_id: component.id,
             result,
             sub_problem,
         }

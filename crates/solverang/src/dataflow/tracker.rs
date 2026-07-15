@@ -36,9 +36,6 @@ pub struct ChangeTracker {
     dirty_params: HashSet<ParamId>,
     /// Clusters that are known to need re-solving.
     dirty_clusters: HashSet<ClusterId>,
-    /// Whether entities or constraints have been added or removed,
-    /// requiring a full re-decomposition.
-    structural_change: bool,
     /// Entity IDs added since the last solve.
     added_entities: Vec<EntityId>,
     /// Entity IDs removed since the last solve.
@@ -55,7 +52,6 @@ impl ChangeTracker {
         Self {
             dirty_params: HashSet::new(),
             dirty_clusters: HashSet::new(),
-            structural_change: false,
             added_entities: Vec::new(),
             removed_entities: Vec::new(),
             added_constraints: Vec::new(),
@@ -88,7 +84,6 @@ impl ChangeTracker {
     ///
     /// Adding an entity is a structural change that requires re-decomposition.
     pub fn mark_entity_added(&mut self, id: EntityId) {
-        self.structural_change = true;
         self.added_entities.push(id);
     }
 
@@ -96,7 +91,6 @@ impl ChangeTracker {
     ///
     /// Removing an entity is a structural change that requires re-decomposition.
     pub fn mark_entity_removed(&mut self, id: EntityId) {
-        self.structural_change = true;
         self.removed_entities.push(id);
     }
 
@@ -104,7 +98,6 @@ impl ChangeTracker {
     ///
     /// Adding a constraint is a structural change that requires re-decomposition.
     pub fn mark_constraint_added(&mut self, id: ConstraintId) {
-        self.structural_change = true;
         self.added_constraints.push(id);
     }
 
@@ -112,7 +105,6 @@ impl ChangeTracker {
     ///
     /// Removing a constraint is a structural change that requires re-decomposition.
     pub fn mark_constraint_removed(&mut self, id: ConstraintId) {
-        self.structural_change = true;
         self.removed_constraints.push(id);
     }
 
@@ -121,13 +113,21 @@ impl ChangeTracker {
     // -----------------------------------------------------------------------
 
     /// Returns `true` if entities or constraints were added or removed.
+    ///
+    /// Derived from the recorded add/remove lists, so it can never disagree
+    /// with them.
     pub fn has_structural_changes(&self) -> bool {
-        self.structural_change
+        !self.added_entities.is_empty()
+            || !self.removed_entities.is_empty()
+            || !self.added_constraints.is_empty()
+            || !self.removed_constraints.is_empty()
     }
 
     /// Returns `true` if any changes have been recorded (structural or parametric).
     pub fn has_any_changes(&self) -> bool {
-        self.structural_change || !self.dirty_params.is_empty() || !self.dirty_clusters.is_empty()
+        self.has_structural_changes()
+            || !self.dirty_params.is_empty()
+            || !self.dirty_clusters.is_empty()
     }
 
     /// The set of parameters that have changed since the last solve.
@@ -166,7 +166,7 @@ impl ChangeTracker {
     /// (entities or constraints added/removed). Pure parameter value changes
     /// do not require re-decomposition.
     pub fn needs_redecompose(&self) -> bool {
-        self.structural_change
+        self.has_structural_changes()
     }
 
     // -----------------------------------------------------------------------
@@ -180,7 +180,6 @@ impl ChangeTracker {
     pub fn clear(&mut self) {
         self.dirty_params.clear();
         self.dirty_clusters.clear();
-        self.structural_change = false;
         self.added_entities.clear();
         self.removed_entities.clear();
         self.added_constraints.clear();

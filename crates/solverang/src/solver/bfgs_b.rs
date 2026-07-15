@@ -12,7 +12,6 @@
 //! 6. Update L-BFGS history with curvature pair (s, y).
 
 use std::collections::VecDeque;
-use std::time::Instant;
 
 use crate::optimization::{
     KktResidual, MultiplierStore, Objective, OptimizationConfig, OptimizationResult,
@@ -23,22 +22,38 @@ use crate::solver::bfgs::{
     dense_gradient, dot, lbfgs_direction, update_lbfgs_history, vec_norm, write_x_to_store,
 };
 use crate::solver::line_search;
+use crate::time::{SolveClock, StdClock};
 
 /// L-BFGS-B solver for box-constrained optimization.
-pub struct BfgsBSolver;
+pub struct BfgsBSolver {
+    config: OptimizationConfig,
+}
 
 impl BfgsBSolver {
+    /// Create a solver with the given configuration.
+    pub fn new(config: OptimizationConfig) -> Self {
+        Self { config }
+    }
+
     /// Solve a box-constrained optimization problem.
     ///
     /// Minimizes `objective.value(store)` subject to the bounds stored in
     /// `store` for each free parameter. Returns when the projected gradient
     /// norm is below tolerance or max iterations are reached.
-    pub fn solve(
+    pub fn solve(&self, objective: &dyn Objective, store: &mut ParamStore) -> OptimizationResult {
+        self.solve_with_clock(objective, store, &StdClock)
+    }
+
+    /// Like [`solve`](Self::solve), but with a host-provided clock for
+    /// duration reporting.
+    pub fn solve_with_clock(
+        &self,
         objective: &dyn Objective,
         store: &mut ParamStore,
-        config: &OptimizationConfig,
+        clock: &impl SolveClock,
     ) -> OptimizationResult {
-        let start = Instant::now();
+        let config = &self.config;
+        let start = clock.mark();
         let mapping = store.build_solver_mapping();
         let n = mapping.len();
 
@@ -56,7 +71,7 @@ impl BfgsBSolver {
                 },
                 multipliers: MultiplierStore::new(),
                 constraint_violations: Vec::new(),
-                duration: start.elapsed(),
+                duration: clock.elapsed(&start),
             };
         }
 
@@ -101,7 +116,7 @@ impl BfgsBSolver {
                     },
                     multipliers: MultiplierStore::new(),
                     constraint_violations: Vec::new(),
-                    duration: start.elapsed(),
+                    duration: clock.elapsed(&start),
                 };
             }
 
@@ -149,7 +164,7 @@ impl BfgsBSolver {
                         },
                         multipliers: MultiplierStore::new(),
                         constraint_violations: Vec::new(),
-                        duration: start.elapsed(),
+                        duration: clock.elapsed(&start),
                     };
                 }
                 s_history.clear();
@@ -181,7 +196,7 @@ impl BfgsBSolver {
                         },
                         multipliers: MultiplierStore::new(),
                         constraint_violations: Vec::new(),
-                        duration: start.elapsed(),
+                        duration: clock.elapsed(&start),
                     };
                 }
             }
@@ -193,12 +208,12 @@ impl BfgsBSolver {
                 objective, store, param_ids, &x, &direction, f, &grad, alpha_max, config,
             ) {
                 Ok(step) => step,
-                Err(_) => {
+                Err(failure) => {
                     // Store was restored to x; report the best point found.
                     write_x_to_store(store, param_ids, &x);
                     return OptimizationResult {
                         objective_value: f,
-                        status: OptimizationStatus::LineSearchFailed,
+                        status: OptimizationStatus::LineSearchFailed(failure),
                         outer_iterations: iter,
                         inner_iterations: 0,
                         kkt_residual: KktResidual {
@@ -208,7 +223,7 @@ impl BfgsBSolver {
                         },
                         multipliers: MultiplierStore::new(),
                         constraint_violations: Vec::new(),
-                        duration: start.elapsed(),
+                        duration: clock.elapsed(&start),
                     };
                 }
             };
@@ -239,8 +254,7 @@ impl BfgsBSolver {
 
             write_x_to_store(store, param_ids, &x_new);
             debug_assert!(
-                (f_new - objective.value(store)).abs()
-                    <= 1e-9 * (1.0 + f_new.abs()),
+                (f_new - objective.value(store)).abs() <= 1e-9 * (1.0 + f_new.abs()),
                 "BfgsB reported objective does not match the accepted iterate"
             );
             let grad_new = dense_gradient(objective, store, param_ids, n);
@@ -250,32 +264,8 @@ impl BfgsBSolver {
 
             // Project gradients: zero out components where the iterate is at a bound
             // and the gradient would push further into the bound
-            let pg_new: Vec<f64> = grad_new
-                .iter()
-                .enumerate()
-                .map(|(i, &g)| {
-                    if x_new[i] <= lower[i] && g > 0.0 {
-                        0.0
-                    } else if x_new[i] >= upper[i] && g < 0.0 {
-                        0.0
-                    } else {
-                        g
-                    }
-                })
-                .collect();
-            let pg_old: Vec<f64> = grad
-                .iter()
-                .enumerate()
-                .map(|(i, &g)| {
-                    if x[i] <= lower[i] && g > 0.0 {
-                        0.0
-                    } else if x[i] >= upper[i] && g < 0.0 {
-                        0.0
-                    } else {
-                        g
-                    }
-                })
-                .collect();
+            let pg_new = project_gradient(&x_new, &grad_new, &lower, &upper);
+            let pg_old = project_gradient(&x, &grad, &lower, &upper);
             let y: Vec<f64> = pg_new.iter().zip(&pg_old).map(|(a, b)| a - b).collect();
 
             update_lbfgs_history(&mut s_history, &mut y_history, s, y, m);
@@ -300,7 +290,7 @@ impl BfgsBSolver {
             },
             multipliers: MultiplierStore::new(),
             constraint_violations: Vec::new(),
-            duration: start.elapsed(),
+            duration: clock.elapsed(&start),
         }
     }
 }
@@ -323,6 +313,26 @@ fn projected_gradient_norm(x: &[f64], grad: &[f64], lower: &[f64], upper: &[f64]
         norm_sq += pg * pg;
     }
     norm_sq.sqrt()
+}
+
+/// True when `x_i` sits at a bound and the gradient points out of the feasible
+/// box, so the steepest-descent direction for this variable is blocked.
+fn at_active_bound(x_i: f64, g_i: f64, lower_i: f64, upper_i: f64) -> bool {
+    (x_i <= lower_i && g_i > 0.0) || (x_i >= upper_i && g_i < 0.0)
+}
+
+/// Project a gradient: zero components whose variables sit at an active bound.
+fn project_gradient(x: &[f64], grad: &[f64], lower: &[f64], upper: &[f64]) -> Vec<f64> {
+    grad.iter()
+        .enumerate()
+        .map(|(i, &g)| {
+            if at_active_bound(x[i], g, lower[i], upper[i]) {
+                0.0
+            } else {
+                g
+            }
+        })
+        .collect()
 }
 
 /// Project a direction vector: zero out components that would push further into
@@ -392,14 +402,9 @@ fn generalized_cauchy_point(
     breakpoints.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
     // Track which variables are active (at a bound and gradient pointing out of feasible set).
-    let mut active = vec![false; n];
-    for i in 0..n {
-        if grad[i] > 0.0 && x[i] <= lower[i] {
-            active[i] = true;
-        } else if grad[i] < 0.0 && x[i] >= upper[i] {
-            active[i] = true;
-        }
-    }
+    let mut active: Vec<bool> = (0..n)
+        .map(|i| at_active_bound(x[i], grad[i], lower[i], upper[i]))
+        .collect();
 
     // Path derivative at t=0: fp = gᵀ d where d[i] = -g[i] for free vars.
     // fp = -sum_{free} g[i]^2
@@ -612,7 +617,7 @@ mod tests {
 
         let obj = LogBarrier { params: vec![p] };
         let config = OptimizationConfig::default();
-        let result = BfgsBSolver::solve(&obj, &mut store, &config);
+        let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
         assert_eq!(result.status, OptimizationStatus::Converged);
         assert!(
@@ -638,7 +643,7 @@ mod tests {
             params: vec![px, py],
         };
         let config = OptimizationConfig::default();
-        let result = BfgsBSolver::solve(&obj, &mut store, &config);
+        let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
         assert_eq!(result.status, OptimizationStatus::Converged);
         assert!(store.get(px).abs() < 1e-6, "px = {}", store.get(px));
@@ -662,14 +667,10 @@ mod tests {
             params: vec![px, py],
         };
         let config = OptimizationConfig::default();
-        let result = BfgsBSolver::solve(&obj, &mut store, &config);
+        let result = BfgsBSolver::new(config.clone()).solve(&obj, &mut store);
 
         assert_eq!(result.status, OptimizationStatus::Converged);
         assert!(store.get(px).abs() < 1e-6, "px = {}", store.get(px));
-        assert!(
-            (store.get(py) + 2.0).abs() < 1e-4,
-            "py = {}",
-            store.get(py)
-        );
+        assert!((store.get(py) + 2.0).abs() < 1e-4, "py = {}", store.get(py));
     }
 }

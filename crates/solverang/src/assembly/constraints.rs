@@ -95,11 +95,8 @@ fn rotate_direction(store: &ParamStore, q: [ParamId; 4], dir: [f64; 3]) -> [f64;
 /// R1*local1 + t1 - R2*local2 - t2 = 0
 /// ```
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Mate {
     id: ConstraintId,
-    body1: EntityId,
-    body2: EntityId,
     local1: [f64; 3],
     local2: [f64; 3],
     params: Vec<ParamId>,
@@ -154,8 +151,6 @@ impl Mate {
         ];
         Self {
             id,
-            body1,
-            body2,
             local1,
             local2,
             params,
@@ -236,11 +231,8 @@ impl Constraint for Mate {
 ///
 /// where `w_p = R*local_point + t` is the world-space axis point.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CoaxialAssembly {
     id: ConstraintId,
-    body1: EntityId,
-    body2: EntityId,
     // Local axis definitions (constants)
     local_point1: [f64; 3],
     local_dir1: [f64; 3],
@@ -297,8 +289,6 @@ impl CoaxialAssembly {
         ];
         Self {
             id,
-            body1,
-            body2,
             local_point1,
             local_dir1,
             local_point2,
@@ -394,11 +384,8 @@ impl Constraint for CoaxialAssembly {
 ///
 /// Total: 5 equations.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Insert {
     id: ConstraintId,
-    body1: EntityId,
-    body2: EntityId,
     local_point1: [f64; 3],
     local_dir1: [f64; 3],
     local_point2: [f64; 3],
@@ -458,8 +445,6 @@ impl Insert {
         ];
         Self {
             id,
-            body1,
-            body2,
             local_point1,
             local_dir1,
             local_point2,
@@ -574,11 +559,8 @@ impl Constraint for Insert {
 ///
 /// where `theta_i` is the rotation angle of body `i` about its local axis.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Gear {
     id: ConstraintId,
-    body1: EntityId,
-    body2: EntityId,
     local_axis1: [f64; 3],
     local_axis2: [f64; 3],
     ratio: f64,
@@ -619,8 +601,6 @@ impl Gear {
         let params = vec![b1_qw, b1_qx, b1_qy, b1_qz, b2_qw, b2_qx, b2_qy, b2_qz];
         Self {
             id,
-            body1,
-            body2,
             local_axis1,
             local_axis2,
             ratio,

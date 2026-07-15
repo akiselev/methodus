@@ -930,23 +930,23 @@ fn test_redundant_fourth_perpendicular_in_rectangle() {
     let p2 = b.add_point(4.1, 3.0);
     let p3 = b.add_point(-0.1, 3.1);
 
-    let l01 = b.add_line_segment(p0, p1);
-    let l12 = b.add_line_segment(p1, p2);
-    let l23 = b.add_line_segment(p2, p3);
-    let l30 = b.add_line_segment(p3, p0);
+    let l01 = b.add_line_segment(p0, p1).unwrap();
+    let l12 = b.add_line_segment(p1, p2).unwrap();
+    let l23 = b.add_line_segment(p2, p3).unwrap();
+    let l30 = b.add_line_segment(p3, p0).unwrap();
 
     // All 4 perpendicular constraints — one is redundant.
-    b.constrain_perpendicular(l01, l12);
-    b.constrain_perpendicular(l12, l23);
-    b.constrain_perpendicular(l23, l30);
-    b.constrain_perpendicular(l30, l01); // This one is implied.
+    b.constrain_perpendicular(l01, l12).unwrap();
+    b.constrain_perpendicular(l12, l23).unwrap();
+    b.constrain_perpendicular(l23, l30).unwrap();
+    b.constrain_perpendicular(l30, l01).unwrap(); // This one is implied.
 
     // Side lengths and orientation to fully constrain.
-    b.constrain_distance(p0, p1, 4.0);
-    b.constrain_distance(p1, p2, 3.0);
-    b.constrain_distance(p2, p3, 4.0);
-    b.constrain_distance(p3, p0, 3.0);
-    b.constrain_horizontal(p0, p1);
+    b.constrain_distance(p0, p1, 4.0).unwrap();
+    b.constrain_distance(p1, p2, 3.0).unwrap();
+    b.constrain_distance(p2, p3, 4.0).unwrap();
+    b.constrain_distance(p3, p0, 3.0).unwrap();
+    b.constrain_horizontal(p0, p1).unwrap();
 
     let sys = b.build();
     let redundancy = sys.analyze_redundancy();
@@ -1162,11 +1162,11 @@ fn test_builder_over_constrained_sketch() {
     let p1 = b.add_point(3.1, 3.9);
 
     // Fix both points via constraints (keeps params in solver mapping).
-    b.constrain_fixed(p0, 0.0, 0.0);
-    b.constrain_fixed(p1, 3.0, 4.0);
+    b.constrain_fixed(p0, 0.0, 0.0).unwrap();
+    b.constrain_fixed(p1, 3.0, 4.0).unwrap();
 
     // Redundant distance: d(P0,P1) = 5 (already determined by fix constraints).
-    b.constrain_distance(p0, p1, 5.0);
+    b.constrain_distance(p0, p1, 5.0).unwrap();
 
     let sys = b.build();
 
@@ -1196,11 +1196,11 @@ fn test_builder_conflicting_sketch() {
     let p1 = b.add_point(3.1, 3.9);
 
     // Fix both points via constraints.
-    b.constrain_fixed(p0, 0.0, 0.0);
-    b.constrain_fixed(p1, 3.0, 4.0);
+    b.constrain_fixed(p0, 0.0, 0.0).unwrap();
+    b.constrain_fixed(p1, 3.0, 4.0).unwrap();
 
     // Conflicting distance: actual = 5, required = 10.
-    b.constrain_distance(p0, p1, 10.0);
+    b.constrain_distance(p0, p1, 10.0).unwrap();
 
     let sys = b.build();
 

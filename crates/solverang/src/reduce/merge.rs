@@ -25,11 +25,9 @@ pub struct ParamMerge {
 /// Result of merge analysis.
 #[derive(Clone, Debug)]
 pub struct MergeResult {
-    /// The list of pairwise merges detected.
+    /// The list of pairwise merges detected. Each merge also removes one
+    /// equality constraint from the solve.
     pub merges: Vec<ParamMerge>,
-    /// Number of equality constraints that can be removed from the solve
-    /// (one per merge).
-    pub constraints_removed: usize,
 }
 
 /// Tolerance for checking whether a Jacobian entry matches +1 or -1.
@@ -48,7 +46,6 @@ const JACOBIAN_TOLERANCE: f64 = 1e-10;
 /// coincident/equality constraint between two scalar parameters.
 pub fn detect_merges(constraints: &[&dyn Constraint], store: &ParamStore) -> MergeResult {
     let mut merges = Vec::new();
-    let mut constraints_removed = 0;
 
     for c in constraints {
         // Only consider single-equation constraints.
@@ -82,13 +79,9 @@ pub fn detect_merges(constraints: &[&dyn Constraint], store: &ParamStore) -> Mer
         };
 
         merges.push(ParamMerge { source, target });
-        constraints_removed += 1;
     }
 
-    MergeResult {
-        merges,
-        constraints_removed,
-    }
+    MergeResult { merges }
 }
 
 /// Check whether a Jacobian represents a simple equality `a - b = 0`.
@@ -269,7 +262,6 @@ mod tests {
         let result = detect_merges(&constraints, &store);
 
         assert_eq!(result.merges.len(), 1);
-        assert_eq!(result.constraints_removed, 1);
         // Higher raw index is the source.
         assert_eq!(result.merges[0].source, b);
         assert_eq!(result.merges[0].target, a);
@@ -291,7 +283,6 @@ mod tests {
         let result = detect_merges(&constraints, &store);
 
         assert_eq!(result.merges.len(), 0);
-        assert_eq!(result.constraints_removed, 0);
     }
 
     #[test]

@@ -1,6 +1,9 @@
 //! Comprehensive solver megatest.
 //!
 //! Tests the solver with massive systems that have known analytical solutions.
+// Tridiagonal Jacobians and grid-adjacency constraints are index math;
+// indexed loops read clearer than iterator chains here.
+#![allow(clippy::needless_range_loop)]
 //! Exercises every solver type across coupled nonlinear, sparse, and parallel systems.
 //!
 //! # Test Structure
@@ -837,7 +840,7 @@ mod v3_pipeline_megatest {
         // Use add_fixed_point for origin (avoids Fixed constraint reduce bug).
         let origin = b.add_fixed_point(0.0, 0.0);
 
-        let mut grid: Vec<Vec<EntityId>> = Vec::new();
+        let mut grid: Vec<Vec<_>> = Vec::new();
         for j in 0..4 {
             let mut row = Vec::new();
             for i in 0..5 {
@@ -855,14 +858,14 @@ mod v3_pipeline_megatest {
         // === Horizontal constraints across each row ===
         for j in 0..4 {
             for i in 0..4 {
-                b.constrain_horizontal(grid[j][i], grid[j][i + 1]);
+                b.constrain_horizontal(grid[j][i], grid[j][i + 1]).unwrap();
             }
         }
 
         // === Vertical constraints down each column ===
         for j in 0..3 {
             for i in 0..5 {
-                b.constrain_vertical(grid[j][i], grid[j + 1][i]);
+                b.constrain_vertical(grid[j][i], grid[j + 1][i]).unwrap();
             }
         }
 
@@ -870,70 +873,72 @@ mod v3_pipeline_megatest {
         // Horizontal/vertical propagate positions; only need spacing on edges.
         // First row: sets column x-spacings.
         for i in 0..4 {
-            b.constrain_distance(grid[0][i], grid[0][i + 1], 10.0);
+            b.constrain_distance(grid[0][i], grid[0][i + 1], 10.0)
+                .unwrap();
         }
         // First column: sets row y-spacings.
         for j in 0..3 {
-            b.constrain_distance(grid[j][0], grid[j + 1][0], 10.0);
+            b.constrain_distance(grid[j][0], grid[j + 1][0], 10.0)
+                .unwrap();
         }
 
         // === Line segments for perpendicular/parallel tests ===
-        let l_bottom = b.add_line_segment(grid[0][0], grid[0][4]);
-        let l_top = b.add_line_segment(grid[3][0], grid[3][4]);
-        let l_left = b.add_line_segment(grid[0][0], grid[3][0]);
-        let l_right = b.add_line_segment(grid[0][4], grid[3][4]);
+        let l_bottom = b.add_line_segment(grid[0][0], grid[0][4]).unwrap();
+        let l_top = b.add_line_segment(grid[3][0], grid[3][4]).unwrap();
+        let l_left = b.add_line_segment(grid[0][0], grid[3][0]).unwrap();
+        let l_right = b.add_line_segment(grid[0][4], grid[3][4]).unwrap();
 
         // === Parallel constraints ===
-        b.constrain_parallel(l_bottom, l_top);
-        b.constrain_parallel(l_left, l_right);
+        b.constrain_parallel(l_bottom, l_top).unwrap();
+        b.constrain_parallel(l_left, l_right).unwrap();
 
         // === Perpendicular constraints ===
-        b.constrain_perpendicular(l_bottom, l_left);
+        b.constrain_perpendicular(l_bottom, l_left).unwrap();
 
         // === Equal-length: left side = right side ===
-        b.constrain_equal_length(l_left, l_right);
+        b.constrain_equal_length(l_left, l_right).unwrap();
 
         // === Circle with points on it ===
         // Fix the circle so its center (25,45) and radius (8) are not free.
         let circle = b.add_circle(25.0, 45.0, 8.0);
-        b.fix_entity(circle);
+        b.fix_entity(circle).unwrap();
         // Three points on the circle: east (33,45), north (25,53), west (17,45).
         let cp1 = b.add_point(33.0, 45.0);
         let cp2 = b.add_point(25.0, 53.0);
         let cp3 = b.add_point(17.0, 45.0);
-        b.constrain_point_on_circle(cp1, circle);
-        b.constrain_point_on_circle(cp2, circle);
-        b.constrain_point_on_circle(cp3, circle);
+        b.constrain_point_on_circle(cp1, circle).unwrap();
+        b.constrain_point_on_circle(cp2, circle).unwrap();
+        b.constrain_point_on_circle(cp3, circle).unwrap();
         // Pin angular positions: horizontal(cp1,cp3), distance(cp1,cp3)=16, distance(cp1,cp2)=8√2.
-        b.constrain_horizontal(cp1, cp3);
-        b.constrain_distance(cp1, cp3, 16.0);
-        b.constrain_distance(cp1, cp2, (128.0_f64).sqrt());
+        b.constrain_horizontal(cp1, cp3).unwrap();
+        b.constrain_distance(cp1, cp3, 16.0).unwrap();
+        b.constrain_distance(cp1, cp2, (128.0_f64).sqrt()).unwrap();
 
         // === Midpoint constraint ===
         let mid = b.add_point(5.5, 5.5);
-        let l_diag = b.add_line_segment(grid[0][0], grid[1][1]);
-        b.constrain_midpoint(mid, l_diag);
+        let l_diag = b.add_line_segment(grid[0][0], grid[1][1]).unwrap();
+        b.constrain_midpoint(mid, l_diag).unwrap();
 
         // === Symmetric about center ===
         // Pin sym_center to known position via distance+vertical to grid point (20,10).
         let sym_center = b.add_point(20.0, 15.0);
         let sym_p1 = b.add_point(15.0, 15.0);
         let sym_p2 = b.add_point(25.0, 15.0);
-        b.constrain_symmetric(sym_p1, sym_p2, sym_center);
-        b.constrain_horizontal(sym_p1, sym_p2);
-        b.constrain_distance(sym_p1, sym_center, 5.0);
-        b.constrain_vertical(sym_center, grid[1][2]); // x_center = 20
-        b.constrain_distance(sym_center, grid[1][2], 5.0); // d((20,15),(20,10))=5
+        b.constrain_symmetric(sym_p1, sym_p2, sym_center).unwrap();
+        b.constrain_horizontal(sym_p1, sym_p2).unwrap();
+        b.constrain_distance(sym_p1, sym_center, 5.0).unwrap();
+        b.constrain_vertical(sym_center, grid[1][2]).unwrap(); // x_center = 20
+        b.constrain_distance(sym_center, grid[1][2], 5.0).unwrap(); // d((20,15),(20,10))=5
 
         // === Tangent line-circle ===
         // Pin tangent line endpoints: vertical(tang_p1,cp3), distance(tang_p1,tang_p2)=16.
         let tang_p1 = b.add_point(17.0, 53.0);
         let tang_p2 = b.add_point(33.0, 53.0);
-        let tang_line = b.add_line_segment(tang_p1, tang_p2);
-        b.constrain_tangent_line_circle(tang_line, circle);
-        b.constrain_horizontal(tang_p1, tang_p2);
-        b.constrain_vertical(tang_p1, cp3); // x_tang_p1 = 17
-        b.constrain_distance(tang_p1, tang_p2, 16.0);
+        let tang_line = b.add_line_segment(tang_p1, tang_p2).unwrap();
+        b.constrain_tangent_line_circle(tang_line, circle).unwrap();
+        b.constrain_horizontal(tang_p1, tang_p2).unwrap();
+        b.constrain_vertical(tang_p1, cp3).unwrap(); // x_tang_p1 = 17
+        b.constrain_distance(tang_p1, tang_p2, 16.0).unwrap();
 
         // === Build and solve ===
         let mut sys = b.build();
@@ -959,7 +964,7 @@ mod v3_pipeline_megatest {
 
         eprintln!(
             "  Solved in {} total iterations across {} clusters",
-            result.total_iterations,
+            result.iterations,
             result.clusters.len()
         );
 
@@ -1124,7 +1129,7 @@ mod v3_pipeline_megatest {
         // First solve (full).
         let result1 = sys.solve();
         assert_solved(&result1);
-        let iters1 = result1.total_iterations;
+        let iters1 = result1.iterations;
 
         // Verify cluster B.
         let db = pt_dist(&sys, xb0, yb0, xb1, yb1);
@@ -1149,7 +1154,7 @@ mod v3_pipeline_megatest {
             .count();
         eprintln!(
             "Incremental: {skipped} clusters skipped, {} total iters (was {iters1})",
-            result2.total_iterations
+            result2.iterations
         );
         assert!(
             skipped >= 1,
@@ -1319,7 +1324,7 @@ mod v3_pipeline_megatest {
         assert!((d01 - 3.0).abs() < 0.01, "Triangle d01={d01}, expected 3.0");
 
         // Remove the distance(e1,e2)=5 constraint (structural change).
-        sys.remove_constraint(cid2);
+        sys.remove_constraint(cid2).unwrap();
         assert_eq!(
             sys.constraint_count(),
             3,
@@ -1367,29 +1372,29 @@ mod v3_pipeline_megatest {
         let p3 = b.add_point(-0.1, 10.1);
 
         // Edges
-        let l01 = b.add_line_segment(p0, p1);
-        let l12 = b.add_line_segment(p1, p2);
-        let l23 = b.add_line_segment(p2, p3);
-        let _l30 = b.add_line_segment(p3, p0);
+        let l01 = b.add_line_segment(p0, p1).unwrap();
+        let l12 = b.add_line_segment(p1, p2).unwrap();
+        let l23 = b.add_line_segment(p2, p3).unwrap();
+        let _l30 = b.add_line_segment(p3, p0).unwrap();
 
         // Side-length constraints
-        b.constrain_distance(p0, p1, 20.0);
-        b.constrain_distance(p1, p2, 10.0);
-        b.constrain_distance(p2, p3, 20.0);
-        b.constrain_distance(p3, p0, 10.0);
+        b.constrain_distance(p0, p1, 20.0).unwrap();
+        b.constrain_distance(p1, p2, 10.0).unwrap();
+        b.constrain_distance(p2, p3, 20.0).unwrap();
+        b.constrain_distance(p3, p0, 10.0).unwrap();
 
         // Right angles (1 perpendicular + horizontal = rectangle)
-        b.constrain_perpendicular(l01, l12);
+        b.constrain_perpendicular(l01, l12).unwrap();
 
         // Horizontal bottom
-        b.constrain_horizontal(p0, p1);
+        b.constrain_horizontal(p0, p1).unwrap();
 
         // Inscribed circle tangent to bottom, right, and top sides.
         // 3 tangent constraints for 3 circle unknowns → DOF=0 for circle.
         let circ = b.add_circle(10.5, 5.5, 4.8);
-        b.constrain_tangent_line_circle(l01, circ);
-        b.constrain_tangent_line_circle(l12, circ);
-        b.constrain_tangent_line_circle(l23, circ);
+        b.constrain_tangent_line_circle(l01, circ).unwrap();
+        b.constrain_tangent_line_circle(l12, circ).unwrap();
+        b.constrain_tangent_line_circle(l23, circ).unwrap();
 
         let mut sys = b.build();
 
@@ -1410,7 +1415,7 @@ mod v3_pipeline_megatest {
 
         eprintln!(
             "Rectangle+inscribed circle: solved in {} iterations",
-            result.total_iterations
+            result.iterations
         );
     }
 
@@ -1434,7 +1439,7 @@ mod v3_pipeline_megatest {
         // Use add_fixed_point for origin (avoids Fixed constraint reduce bug).
         let origin = b.add_fixed_point(0.0, 0.0);
 
-        let mut grid: Vec<Vec<EntityId>> = Vec::new();
+        let mut grid: Vec<Vec<_>> = Vec::new();
         for j in 0..rows {
             let mut row = Vec::new();
             for i in 0..cols {
@@ -1452,24 +1457,26 @@ mod v3_pipeline_megatest {
         // Horizontal constraints across rows.
         for j in 0..rows {
             for i in 0..(cols - 1) {
-                b.constrain_horizontal(grid[j][i], grid[j][i + 1]);
+                b.constrain_horizontal(grid[j][i], grid[j][i + 1]).unwrap();
             }
         }
 
         // Vertical constraints down columns.
         for j in 0..(rows - 1) {
             for i in 0..cols {
-                b.constrain_vertical(grid[j][i], grid[j + 1][i]);
+                b.constrain_vertical(grid[j][i], grid[j + 1][i]).unwrap();
             }
         }
 
         // Distance constraints ONLY for first row and first column
         // (horizontal/vertical propagate positions throughout the grid).
         for i in 0..(cols - 1) {
-            b.constrain_distance(grid[0][i], grid[0][i + 1], spacing);
+            b.constrain_distance(grid[0][i], grid[0][i + 1], spacing)
+                .unwrap();
         }
         for j in 0..(rows - 1) {
-            b.constrain_distance(grid[j][0], grid[j + 1][0], spacing);
+            b.constrain_distance(grid[j][0], grid[j + 1][0], spacing)
+                .unwrap();
         }
 
         let mut sys = b.build();
@@ -1500,7 +1507,7 @@ mod v3_pipeline_megatest {
 
         eprintln!(
             "  Solved in {} iterations across {} clusters, duration {:?}",
-            result.total_iterations,
+            result.iterations,
             result.clusters.len(),
             result.duration,
         );
@@ -1612,7 +1619,7 @@ mod v3_pipeline_megatest {
         );
 
         // Cycle 3: remove distance d12, add vertical on p2, re-solve (structural change).
-        sys.remove_constraint(cid_d12);
+        sys.remove_constraint(cid_d12).unwrap();
         let cid_v = sys.alloc_constraint_id();
         sys.add_constraint(Box::new(Vertical::new(cid_v, e0, e2, x0, x2)));
 

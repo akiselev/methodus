@@ -48,13 +48,14 @@
 //! assert!(result.is_converged());
 //! ```
 
-pub mod alm;
+pub(crate) mod alm;
 mod auto;
-pub mod bfgs;
-pub mod bfgs_b;
+pub(crate) mod bfgs;
+pub(crate) mod bfgs_b;
+mod common;
 mod config;
 mod levenberg_marquardt;
-pub mod line_search;
+pub(crate) mod line_search;
 mod lm_adapter;
 mod lm_config;
 mod newton_raphson;
@@ -82,7 +83,7 @@ pub use parallel::{ParallelSolver, ParallelSolverConfig};
 // Sparse solver
 pub use sparse_solver::{should_use_sparse, SparseSolver, SparseSolverConfig};
 
-pub mod trust_region;
+pub(crate) mod trust_region;
 
 // Optimization solvers
 pub use alm::AlmSolver;
@@ -91,11 +92,12 @@ pub use bfgs_b::BfgsBSolver;
 pub use trust_region::TrustRegionSolver;
 
 // Line search types
-pub use line_search::{LineSearchError, LineSearchFailure, LineSearchStep, StepCondition};
+pub use crate::optimization::{LineSearchError, LineSearchFailure};
+pub use line_search::{LineSearchStep, StepCondition};
 
 // Result types
 pub use result::{SolveError, SolveResult};
 
 // JIT solver
 #[cfg(feature = "jit")]
-pub use jit_solver::{try_compile, JITCompilationResult, JITSolver};
+pub use jit_solver::{try_compile, JITCompilationResult, JITSolver, JitFallback};

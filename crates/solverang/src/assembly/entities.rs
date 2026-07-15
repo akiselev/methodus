@@ -39,6 +39,7 @@ pub struct RigidBody {
 
 impl RigidBody {
     /// Create a new rigid body entity.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: EntityId,
         tx: ParamId,
@@ -130,10 +131,8 @@ impl Entity for RigidBody {
 /// This constraint should always accompany a [`RigidBody`] to keep the
 /// quaternion on the unit sphere during solving.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct UnitQuaternion {
     id: ConstraintId,
-    body_entity: EntityId,
     qw: ParamId,
     qx: ParamId,
     qy: ParamId,
@@ -154,7 +153,6 @@ impl UnitQuaternion {
     ) -> Self {
         Self {
             id,
-            body_entity,
             qw,
             qx,
             qy,

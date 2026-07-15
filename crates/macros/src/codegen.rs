@@ -65,32 +65,6 @@ pub fn generate_jacobian_method(jacobians: &[JacobianInfo]) -> TokenStream {
     }
 }
 
-/// Generate code that adds Jacobian entries to a mutable Vec.
-///
-/// This variant is useful when the caller wants to control the container.
-#[allow(dead_code)]
-pub fn generate_jacobian_append(
-    jacobians: &[JacobianInfo],
-    entries_var: &syn::Ident,
-) -> TokenStream {
-    let mut pushes = Vec::new();
-
-    for jac_info in jacobians {
-        let row = jac_info.residual_row;
-
-        for (col_expr, deriv_tokens) in &jac_info.entries {
-            let col: TokenStream = col_expr.parse().expect("valid column expression");
-            pushes.push(quote! {
-                #entries_var.push((#row, #col, #deriv_tokens));
-            });
-        }
-    }
-
-    quote! {
-        #(#pushes)*
-    }
-}
-
 /// Generate Hessian entries for a scalar expression.
 /// Returns (var_i_index, var_j_index, second_derivative_tokens) for lower triangle (i >= j).
 pub fn generate_hessian_entries(

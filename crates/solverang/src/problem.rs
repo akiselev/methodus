@@ -94,6 +94,14 @@ pub trait Problem: Send + Sync {
         self.residual_count() >= self.variable_count()
     }
 
+    /// Whether the system is square (as many equations as variables).
+    ///
+    /// Square systems admit Newton-Raphson; non-square systems need a
+    /// least-squares method such as Levenberg-Marquardt.
+    fn is_square(&self) -> bool {
+        self.residual_count() == self.variable_count()
+    }
+
     /// Compute residual norm ||F(x)||_2 = sqrt(sum(F\[i\]^2)).
     fn residual_norm(&self, x: &[f64]) -> f64 {
         let r = self.residuals(x);
@@ -117,14 +125,21 @@ pub trait Problem: Send + Sync {
     }
 }
 
+/// A boxed residual closure: maps the variable vector to one residual value.
+pub type ResidualFn = Box<dyn Fn(&[f64]) -> f64 + Send + Sync>;
+
+/// A boxed Jacobian closure: maps the variable vector to sparse
+/// `(row, col, value)` triplets.
+pub type JacobianFn = Box<dyn Fn(&[f64]) -> Vec<(usize, usize, f64)> + Send + Sync>;
+
 /// A problem built from closure functions.
 ///
 /// Created by [`ProblemBuilder::build`]. Implements [`Problem`] by dispatching
 /// to the closures provided during construction.
 pub struct ClosureProblem {
     n_vars: usize,
-    residual_fns: Vec<Box<dyn Fn(&[f64]) -> f64 + Send + Sync>>,
-    jacobian_fn: Option<Box<dyn Fn(&[f64]) -> Vec<(usize, usize, f64)> + Send + Sync>>,
+    residual_fns: Vec<ResidualFn>,
+    jacobian_fn: Option<JacobianFn>,
     name: String,
 }
 
@@ -210,8 +225,8 @@ impl Problem for ClosureProblem {
 /// ```
 pub struct ProblemBuilder {
     n_vars: usize,
-    residual_fns: Vec<Box<dyn Fn(&[f64]) -> f64 + Send + Sync>>,
-    jacobian_fn: Option<Box<dyn Fn(&[f64]) -> Vec<(usize, usize, f64)> + Send + Sync>>,
+    residual_fns: Vec<ResidualFn>,
+    jacobian_fn: Option<JacobianFn>,
     name: String,
 }
 
