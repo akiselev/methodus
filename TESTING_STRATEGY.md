@@ -384,6 +384,49 @@ fn parallel_matches_sequential() {
 }
 ```
 
+**D. D-Cubed differential oracle (IMPLEMENTED — `tests/differential_oracle.rs`)**
+
+A *solve-and-diff* lane that treats the licensed **Siemens D-Cubed 2D DCM**
+(`dcu2d78.dll`) as the reference solver and asserts `solverang`'s **semantic
+classification** of a constraint system matches it — well- / under- / over-defined,
+DOF count, redundancy/conflict, and satisfiability — never solved coordinates.
+
+*Clean-room boundary.* The DLL is **never** linked, loaded, or embedded by
+`solverang`. It runs only out-of-tree in the private RE repo `../solverang-re`,
+under wine, behind its public `DCM_*` C API. What crosses into this repo is a
+*classification* (a fact about correct constraint solving, independently
+re-derivable by hand — each test documents the derivation), stored as an expected
+value in a comment + assertion. No proprietary code, coordinates, or data enter
+`solverang`.
+
+*Scenario set (8).* two points + coincident (well-defined, 0 DOF); + distance
+(under-defined, 1 DOF rotation); rigid triangle on a grounded edge (well-defined);
+redundant distance (over-constrained, consistent); conflicting distance
+(over-constrained, inconsistent); tangent line/circle; parallel lines;
+perpendicular lines. Each grounds a reference in both engines (`add_fixed_point`
+here, `DCM_fix` there) so DOF is measured modulo rigid-body motion.
+
+*solverang observables used:* `analyze_dof()` (`total_dof`, per-entity `dof`),
+`analyze_redundancy()` (`redundant`, `conflicts`, `rank_deficiency`),
+`solve().status` + post-solve residual. *D-Cubed observables:*
+`DCM_degree_of_singularity` (dos), `DCM_underdefined_dof`/`_status`,
+`DCM_constraint_balance`.
+
+*Regenerating the reference verdicts* (only in `../solverang-re`):
+```text
+make -C harness diff_2d.exe        # cross-compiled PE probe (built at -O0)
+bash harness/run-diff.sh           # each scenario in its own wine process
+```
+Transcribe the printed `dos` / `underdef_status` / `dof_count` into the test's
+`DCUBED_*` comment as the expected classification.
+
+*Findings so far.* One real divergence is pinned (not forced to pass): `solve()`
+returns `Solved` for an unsatisfiable over-determined cluster where D-Cubed reports
+`NOT_SATISFIED` — `solverang` still detects it via `analyze_redundancy().conflicts`,
+so the classification agrees, but `solve().status` alone is not a satisfaction
+certificate (`#[ignore]`d `s5_known_divergence_*`, tracked in `TODO.md §13`). The
+lane also flags the missing **rigidity** observable (`DCM_bs_rigidity`) as a gap.
+
 ---
 
 ### 9. Concurrency / Thread Safety Testing

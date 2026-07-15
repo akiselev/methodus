@@ -195,6 +195,30 @@ Builder metadata supports points, lines, circles — but not arcs, despite the l
 - [ ] Serialization with stable external IDs independent of arena generations.
 - [ ] A small WASM sketch demo exercising interactive re-solving.
 
+### 13. Differential-oracle observable gaps (surfaced by the D-Cubed lane)
+
+*From `crates/solverang/tests/differential_oracle.rs` — the solve-and-diff lane against the
+licensed D-Cubed 2D DCM (reference verdicts generated out-of-tree in `../solverang-re`). Both
+items are honest gaps found by comparing semantic classifications; neither is a clean-room
+violation (no proprietary code/data enters this repo).*
+
+- [ ] **`solve().status` over-reports `Solved` on unsatisfiable over-determined clusters.**
+  A conflicting system (e.g. `distance=10` AND `distance=7` on the same pair) converges the
+  least-squares minimum and `certify_final_residuals` exempts over-determined clusters whose
+  residual matches the reported least-squares norm, so `solve()` returns `Solved` with a large
+  residual. D-Cubed reports `NOT_SATISFIED`. `solverang` *does* detect the conflict via
+  `analyze_redundancy().conflicts`, so the correct classification is obtainable — but
+  `solve().status` alone is not a satisfaction certificate. Fix: mark a cluster that converged
+  to a non-zero least-squares residual (‖r‖ above `final_residual_tolerance`) as
+  `PartiallySolved` / `DiagnosticFailure`, so `Solved` means "all constraints satisfied".
+  Pinned by the `#[ignore]`d `s5_known_divergence_solve_status_reports_solved_on_conflict`.
+- [ ] **No rigidity classification.** D-Cubed exposes `DCM_bs_rigidity`
+  (RIGID / SCALABLE / UNI_SCALABLE / FLEXIBLE / BI_SCALABLE) per body-set — a distinctive
+  observable the lane cannot yet diff. `solverang` has `analyze_dof` (well/under/over via
+  Jacobian rank) but no rigid-vs-scalable distinction (a scalable set has a uniform-scaling
+  null-space direction; a rigid set has none). Add a rigidity classifier over the cluster
+  null-space so the lane can assert rigidity, not just DOF sign.
+
 ---
 
 ## P3: General numerical capabilities (after correctness work)
