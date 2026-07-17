@@ -119,6 +119,78 @@ impl<'a, D: DaeResidual<f64> + Sync> DaeStepProblem<'a, D> {
             .unwrap_or_else(|p| p.into_inner())
             .take()
     }
+
+    /// The magnitude of the stage residual's **constituent terms** at `x` (before their
+    /// cancellation into `G(x)`) — the natural scale for a *relative* Newton tolerance.
+    ///
+    /// `G(x)` is a sum of large, near-cancelling terms (`a₀·q`, the BDF history, `g`),
+    /// so its floating-point floor is `‖constituents‖·ε`, not `ε`. Scaling the Newton
+    /// tolerance by this quantity (`newton_tol + newton_rtol·scale`) keeps the test
+    /// above that floor for any state magnitude — tracking `a₀`, `‖J‖` and `‖x‖` — while
+    /// vanishing toward the absolute floor for well-scaled problems. A seam failure
+    /// yields `0.0` (falling back to the pure absolute tolerance); the real solve
+    /// re-hits the seam and surfaces the error typed.
+    fn residual_scale(&self, x: &[f64]) -> f64 {
+        let n = self.n;
+        let l2 = |acc: f64| acc.sqrt();
+        match &self.stage {
+            Stage::Bdf { t_np1, a0, hist } => {
+                let mut q = vec![0.0; n];
+                if self.dae.charge(self.ctx, *t_np1, x, &mut q).is_err() {
+                    return 0.0;
+                }
+                let mut g = vec![0.0; n];
+                if self.dae.residual_at(self.ctx, *t_np1, x, &mut g).is_err() {
+                    return 0.0;
+                }
+                let acc = (0..n)
+                    .map(|i| {
+                        let term = (a0 * q[i]).abs() + hist[i].abs() + g[i].abs();
+                        term * term
+                    })
+                    .sum();
+                l2(acc)
+            }
+            Stage::GenAlpha {
+                t_af,
+                h,
+                alpha_m,
+                alpha_f,
+                gamma,
+                x_n,
+                xdot_n,
+                ..
+            } => {
+                let inv = 1.0 / (gamma * h);
+                let c1 = (1.0 - gamma) / gamma;
+                let xdot_np1: Vec<f64> =
+                    (0..n).map(|i| inv * (x[i] - x_n[i]) - c1 * xdot_n[i]).collect();
+                let x_af: Vec<f64> = (0..n).map(|i| x_n[i] + alpha_f * (x[i] - x_n[i])).collect();
+                let xdot_am: Vec<f64> = (0..n)
+                    .map(|i| xdot_n[i] + alpha_m * (xdot_np1[i] - xdot_n[i]))
+                    .collect();
+                let mut m = vec![0.0; n];
+                if self
+                    .dae
+                    .mass_apply(self.ctx, *t_af, &x_af, &xdot_am, &mut m)
+                    .is_err()
+                {
+                    return 0.0;
+                }
+                let mut g = vec![0.0; n];
+                if self.dae.residual_at(self.ctx, *t_af, &x_af, &mut g).is_err() {
+                    return 0.0;
+                }
+                let acc = (0..n)
+                    .map(|i| {
+                        let term = m[i].abs() + g[i].abs();
+                        term * term
+                    })
+                    .sum();
+                l2(acc)
+            }
+        }
+    }
 }
 
 impl<D: DaeResidual<f64> + Sync> Problem for DaeStepProblem<'_, D> {
@@ -401,6 +473,7 @@ pub(crate) fn bdf_step<D: DaeResidual<f64> + Sync>(
     q_nm1: Option<&[f64]>,
     x_pred: &[f64],
     newton_cfg: &SolverConfig,
+    newton_rtol: f64,
 ) -> Result<StepOutcome, IntegrateError> {
     let n = dae.n();
     let t_np1 = t_n + h;
@@ -424,7 +497,7 @@ pub(crate) fn bdf_step<D: DaeResidual<f64> + Sync>(
         residual_evals: AtomicUsize::new(0),
         jacobian_evals: AtomicUsize::new(0),
     };
-    let (x_new, res_norm, iters) = solve_stage(&problem, x_pred, newton_cfg)?;
+    let (x_new, res_norm, iters) = solve_stage(&problem, x_pred, newton_cfg, newton_rtol)?;
     let x_n_owned = x_n.to_vec();
     finish(&problem, x_new, res_norm, iters, x_pred, move |x_new| {
         // ẋ^{n+1} ≈ (x^{n+1} − x^n) / h  (a first-order slope for the next predictor).
@@ -444,6 +517,7 @@ pub(crate) fn gen_alpha_step<D: DaeResidual<f64> + Sync>(
     xdot_n: &[f64],
     x_pred: &[f64],
     newton_cfg: &SolverConfig,
+    newton_rtol: f64,
 ) -> Result<StepOutcome, IntegrateError> {
     let n = dae.n();
     let (alpha_m, alpha_f, gamma) = gen_alpha_params(rho_inf);
@@ -470,7 +544,7 @@ pub(crate) fn gen_alpha_step<D: DaeResidual<f64> + Sync>(
         residual_evals: AtomicUsize::new(0),
         jacobian_evals: AtomicUsize::new(0),
     };
-    let (x_new, res_norm, iters) = solve_stage(&problem, x_pred, newton_cfg)?;
+    let (x_new, res_norm, iters) = solve_stage(&problem, x_pred, newton_cfg, newton_rtol)?;
     let inv = 1.0 / (gamma * h);
     let c1 = (1.0 - gamma) / gamma;
     let x_n_owned = x_n.to_vec();
@@ -485,12 +559,22 @@ pub(crate) fn gen_alpha_step<D: DaeResidual<f64> + Sync>(
 
 /// Solve the assembled stage with solverang's globalized Newton, mapping the result
 /// onto `(x_new, residual_norm, iterations)` or a typed seam error.
+///
+/// The Newton convergence tolerance is the **mixed absolute+relative** form
+/// `newton_cfg.tolerance + newton_rtol · scale`, where `scale` is the stage residual's
+/// constituent magnitude at the predictor (see [`DaeStepProblem::residual_scale`]). This
+/// keeps the test above the per-step cancellation floor for high-magnitude states
+/// without loosening well-scaled problems.
 fn solve_stage<D: DaeResidual<f64> + Sync>(
     problem: &DaeStepProblem<'_, D>,
     x_pred: &[f64],
     newton_cfg: &SolverConfig,
+    newton_rtol: f64,
 ) -> Result<(Option<Vec<f64>>, f64, usize), IntegrateError> {
-    let solver = Solver::new(newton_cfg.clone());
+    let scale = problem.residual_scale(x_pred);
+    let mut cfg = newton_cfg.clone();
+    cfg.tolerance = newton_cfg.tolerance + newton_rtol * scale;
+    let solver = Solver::new(cfg);
     let result = solver.solve(problem, x_pred);
     // A seam error captured mid-Newton is fatal and takes precedence.
     if let Some(e) = problem.take_error() {

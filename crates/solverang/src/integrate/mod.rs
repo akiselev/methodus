@@ -269,6 +269,7 @@ pub fn integrate_dae<D: DaeResidual<f64> + Sync>(
                     None,
                     &x_pred,
                     &newton_cfg,
+                    opts.newton_rtol,
                 ),
                 Method::Bdf2 => bdf_step(
                     dae,
@@ -281,9 +282,11 @@ pub fn integrate_dae<D: DaeResidual<f64> + Sync>(
                     if use_bdf2 { q_nm1.as_deref() } else { None },
                     &x_pred,
                     &newton_cfg,
+                    opts.newton_rtol,
                 ),
                 Method::GeneralizedAlpha { rho_inf } => gen_alpha_step(
                     dae, ctx, t_prev, h_try, rho_inf, &x_prev, &xdot_prev, &x_pred, &newton_cfg,
+                    opts.newton_rtol,
                 ),
             };
 

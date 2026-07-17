@@ -95,8 +95,23 @@ pub struct IntegratorOptions {
     pub max_steps: usize,
     /// Maximum Newton iterations per step attempt.
     pub max_newton_iters: usize,
-    /// Newton convergence tolerance (residual norm) for the per-step solve.
+    /// **Absolute** floor of the per-step Newton convergence test (residual norm).
+    ///
+    /// The per-step Newton is judged converged when `‖G(x)‖ ≤ newton_tol +
+    /// newton_rtol · scale`, where `scale` is the magnitude of the stage residual's
+    /// constituent terms (the SUNDIALS-style mixed absolute+relative form). `newton_tol`
+    /// is the absolute part — it dominates for well-scaled problems (where `scale` is
+    /// `O(‖G‖)`), keeping the classic tight behaviour; `newton_rtol · scale` dominates
+    /// for high-magnitude / high-conductivity states, where it sits safely above the
+    /// per-step cancellation floor `‖a₀·M + K‖·‖x‖·ε` that an absolute-only tolerance
+    /// spuriously fails against (collapsing the step to `min_step`).
     pub newton_tol: f64,
+    /// **Relative** part of the per-step Newton convergence test — see [`newton_tol`].
+    /// Scales with the problem magnitude so the test never falls below the residual
+    /// cancellation floor. `0.0` recovers a pure absolute tolerance.
+    ///
+    /// [`newton_tol`]: IntegratorOptions::newton_tol
+    pub newton_rtol: f64,
     /// Exclude structurally algebraic components (zero mass rows) from the local-error
     /// test — the *suppress-alg* remedy (SUNDIALS IDA). On by default; without it the
     /// O(h) predictor error on an index-1 DAE's algebraic rows collapses the step size.
@@ -123,6 +138,10 @@ impl IntegratorOptions {
             max_steps: 10_000_000,
             max_newton_iters: 50,
             newton_tol: 1e-11,
+            // ~7 orders above machine epsilon: `newton_rtol · scale` sits well above the
+            // residual cancellation floor (`~scale · ε`) for any state magnitude, while
+            // still resolving the stage residual to ~9 relative digits.
+            newton_rtol: 1e-9,
             suppress_algebraic: true,
             controller: PiControllerConfig::default(),
         }
