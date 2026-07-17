@@ -378,6 +378,7 @@ pub mod time;
 // --- Existing modules (kept as-is) ---
 pub mod constraints;
 pub mod decomposition;
+pub mod integrate;
 pub mod jacobian;
 pub mod problem;
 pub mod solver;
@@ -395,6 +396,12 @@ pub use solver::{
 
 pub use decomposition::{
     decompose, decompose_from_edges, Component, ComponentId, DecomposableProblem, SubProblem,
+};
+
+// --- DAE/ODE time-integration stack (M3 first-transient-result runtime) ---
+pub use integrate::{
+    integrate_dae, IntegrateError, IntegrateStats, IntegrateStatus, IntegratorOptions, Method,
+    PiControllerConfig, Trajectory,
 };
 
 pub use constraints::{

@@ -260,6 +260,48 @@ from `../parasolid-re/`; new items not already covered above):
 
 ---
 
+## DAE/ODE time integration (`src/integrate/`) — M3 first-transient-result runtime
+
+**Landed 2026-07-17** (additive; +22 tests, suite 1071 → 1093 default-feature, green):
+the BDF/generalized-α integrator stack over the `numeric_contracts::DaeResidual` seam.
+Implicit Euler (BDF-1) + variable-step BDF-2 + generalized-α (`ρ∞`-damped), a PI
+step-size controller with *suppress-alg* on index-1 algebraic rows, the per-step Newton
+reusing solverang's globalized `Solver` via a `Problem` adapter, and the panic-free
+`integrate_dae(...) -> Trajectory` entry point. Verified on scalar decay, a stiff
+system (A-stability), order-of-convergence, an index-1 DAE, and PI accept/reject.
+
+Deferred follow-ups (documented seams; not built at M3):
+
+- [ ] **Dense output** — a per-step continuous interpolant (currently only step
+      endpoints are recorded). Prerequisite for the event loop's crossing evaluation.
+- [ ] **Event loop** (`numeric_contracts::EventBearing`): dense-output crossing eval →
+      Sturm-sequence root isolation → event iteration to a discrete fixed point →
+      consistent reinit → restart (order → 1). `IntegrateStatus::Terminated` is reserved.
+- [ ] **Consistent initialization** for index-1+ DAEs (algebraic-variable rate recovery
+      / index reduction) — today the initial algebraic rate comes from a least-squares
+      `M ẋ = −g` solve and those components are suppressed from the error test.
+- [ ] **Sharper / method-matched error estimate + order control.** The estimate uses an
+      order-1 predictor, so the controller enforces order-1 accuracy control on the
+      2nd-order methods (correct but conservative on step growth). Add an order-2
+      predictor (3-point history) and variable-order BDF (order up + down control).
+- [ ] **Radau IIA / ESDIRK** stage-Newton implicit-RK methods (stiffly accurate,
+      higher order) alongside the current linear-multistep family.
+- [ ] **Full DymNL robust globalization ladder** — homotopy/continuation, residual
+      scaling, singular-pivot guard beyond the reused line search, exposed as a
+      `Globalization { line_search, homotopy, scaling, pivot_guard }` config. The
+      integrator's per-step Newton **consumes** this; it does not re-author it.
+- [ ] **Unified factor reuse** — one factored Jacobian amortized across the per-step
+      Newton, the adjoint (DWR), and ROM samples via the numeric-contracts factor-reuse
+      handle (`Factored` / `FactorReusePolicy`). Today each Newton iteration reassembles
+      the dense iteration matrix and refactorizes (the `DaeStepProblem`/`iteration_matrix`
+      path rebuilds the matrix per call). Also: symbolic-pattern reuse so the seam's
+      "values-only" `iteration_matrix` fast path is actually exercised.
+- [ ] **Stiff kinetics / operator-split / block preconditioning** (per-cell batched
+      stiff-ODE integrator, Strang split, point-block ILU) — the physics-operators
+      additions that consume the same globalization + factor-reuse machinery.
+
+---
+
 ## Release & repository work
 
 ### Packaging / features

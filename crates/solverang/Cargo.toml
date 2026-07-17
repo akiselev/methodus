@@ -32,6 +32,14 @@ levenberg-marquardt = "0.15"
 # Error handling
 thiserror = "2.0"
 
+# DAE/ODE time-integration seam (federation numeric contracts). Mirrors the anvil
+# path-dep: solverang consumes the `DaeResidual` / `IntegratorCoeffs` contracts to
+# drive its BDF / generalized-alpha integrator (`integrate` module) WITHOUT importing
+# the physics-assembly crate (`residua`). Types + traits only; no algorithm crosses
+# the seam. Its `nalgebra`/`num-complex` transitive deps compile alongside solverang's
+# own (only `f64` slices cross the boundary, so the version skew is harmless).
+numeric-contracts = { package = "sinbad-numeric-contracts", path = "/home/dev/sinbad/crates/numeric-contracts" }
+
 # Optional: parallel solving
 rayon = { version = "1.10", optional = true }
 

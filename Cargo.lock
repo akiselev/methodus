@@ -1091,7 +1091,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8be7a65739a815308eef33a6d8c78e435a7317305d5b0af0c8c465a2d7ac6fc6"
 dependencies = [
  "cfg-if",
- "nalgebra",
+ "nalgebra 0.34.1",
  "num-traits",
  "rustc_version",
 ]
@@ -1169,6 +1169,22 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "nalgebra"
+version = "0.33.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d43ddcacf343185dfd6de2ee786d9e8b1c2301622afab66b6c73baf9882abfd"
+dependencies = [
+ "approx",
+ "matrixmultiply",
+ "nalgebra-macros 0.2.2",
+ "num-complex",
+ "num-rational",
+ "num-traits",
+ "simba",
+ "typenum",
+]
+
+[[package]]
+name = "nalgebra"
 version = "0.34.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4d5b3eff5cd580f93da45e64715e8c20a3996342f1e466599cf7a267a0c2f5f"
@@ -1191,12 +1207,23 @@ dependencies = [
  "glam 0.29.3",
  "glam 0.30.10",
  "matrixmultiply",
- "nalgebra-macros",
+ "nalgebra-macros 0.3.0",
  "num-complex",
  "num-rational",
  "num-traits",
  "simba",
  "typenum",
+]
+
+[[package]]
+name = "nalgebra-macros"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "254a5372af8fc138e36684761d3c0cdb758a4410e938babcff1c860ce14ddbfc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1940,8 +1967,33 @@ dependencies = [
  "cranelift-jit",
  "cranelift-module",
  "cranelift-native",
- "nalgebra",
+ "nalgebra 0.34.1",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "sinbad-geom-contracts"
+version = "0.1.0"
+dependencies = [
+ "nalgebra 0.33.3",
+ "serde",
+]
+
+[[package]]
+name = "sinbad-numeric-contracts"
+version = "0.1.0"
+dependencies = [
+ "num-complex",
+ "serde",
+ "sinbad-geom-contracts",
+ "sinbad-pal",
+]
+
+[[package]]
+name = "sinbad-pal"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1957,10 +2009,11 @@ dependencies = [
  "criterion",
  "faer",
  "levenberg-marquardt",
- "nalgebra",
+ "nalgebra 0.34.1",
  "proptest",
  "rayon",
  "sinbad-anvil",
+ "sinbad-numeric-contracts",
  "solverang_macros",
  "thiserror 2.0.18",
 ]

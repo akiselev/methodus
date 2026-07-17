@@ -1,6 +1,6 @@
 # Solverang -- Repository Status
 
-*Last updated: 2026-07-15*
+*Last updated: 2026-07-17*
 
 ## Overview
 
@@ -9,6 +9,47 @@ Solverang is a domain-agnostic numerical solver for nonlinear systems and least-
 **Architecture**: V3 "solver-first" -- the solver core never imports a geometry type. Domain-specific modules (sketch2d, sketch3d, assembly) implement the `Entity` and `Constraint` extension traits.
 
 ## Latest Work
+
+**2026-07-17 — DAE/ODE time-integration stack** (`src/integrate/`, the runtime half of
+the SINBAD M3 first-transient-result path). New, additive; the pre-existing ~1071
+default-feature tests stay green (now 1093 with +22 integrator tests).
+
+- **New dep:** `numeric-contracts` (pkg `sinbad-numeric-contracts`, path-dep to
+  `/home/dev/sinbad`), mirroring the existing `anvil` path-dep. solverang consumes the
+  `DaeResidual` / `IntegratorCoeffs` seam (types + traits only) to integrate a
+  first-order DAE `d/dt q(x,t) + g(x,t) = 0` **without importing the physics-assembly
+  crate**. Only `f64` slices cross the boundary, so the crate's transitive `nalgebra`
+  0.33 compiles harmlessly alongside solverang's 0.34.
+- **Methods:** implicit Euler (BDF-1, L-stable), variable-step **BDF-2** (the index-1
+  first-order-DAE workhorse; bootstraps with one Euler step), and **generalized-α**
+  (Jansen–Whiting–Hulbert first-order form, `ρ∞`-damped — the `cardan` shape). Each
+  forms its per-step nonlinear system from the seam (`residual_at` + charge-difference
+  time derivative via `charge`/`mass_apply`) with Newton matrix `iteration_matrix(...)`.
+- **Per-step Newton reuse:** a `DaeStepProblem` adapter (in `integrate::step`)
+  implements solverang's `Problem` over one stage (`residual_at`→`residuals`,
+  `iteration_matrix`→COO `jacobian`) and is solved by the **existing globalized
+  `Solver`** (Newton + line search). No bespoke Newton loop.
+- **PI (predictive) step controller** (`integrate::controller`): weighted-RMS
+  local-error estimate from the predictor/corrector difference, accept/reject/retry,
+  Gustafsson PI step adaptation. Structurally algebraic components (zero mass rows) are
+  excluded from the error test (*suppress-alg*, à la SUNDIALS IDA) so index-1 DAEs don't
+  collapse the step size.
+- **Entry point:** `integrate_dae(problem, ctx, t_span, x0, opts) -> Trajectory`
+  (time/state history + `IntegrateStatus`). **Panic-free**: every failure is a typed
+  `IntegrateError` carried in the status with the partial history preserved.
+- **Verified** (`tests/dae_integration.rs`, 17 tests, hand-built `DaeResidual` impls):
+  scalar-decay accuracy (fixed + adaptive), stiff-system A-stability at `hλ = 100`,
+  order of convergence (BDF-2 ≈ 4×, implicit Euler ≈ 2×, gen-α ≈ 4× for `ρ∞ ∈ {0,½,1}`),
+  a linear index-1 DAE with a singular mass row, PI accept/reject, and typed-error paths.
+- **Deferred seams** (documented in the module docs + TODO §DAE): dense output, the
+  event loop (`EventBearing`), higher-order/order control + Radau IIA / ESDIRK, the full
+  DymNL globalization ladder (homotopy/continuation/scaling), and unified factor reuse
+  (one factored Jacobian across Newton/adjoint/ROM). Today each Newton iteration
+  reassembles + refactorizes, and the error estimate uses an order-1 predictor (so the
+  adaptive controller is conservative on the 2nd-order methods — correct, just not yet
+  step-optimal).
+
+**2026-07-15 — code-quality and API-design overhaul** (from
 
 **2026-07-15 — code-quality and API-design overhaul** (from
 `docs/notes/2026-07-15-code-quality-review.md`; all eight review work items done):
