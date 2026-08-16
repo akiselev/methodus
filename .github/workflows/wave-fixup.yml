@@ -1,0 +1,50 @@
+name: wave-fixup
+
+on:
+  push:
+    branches: [agent/r13-r20-wave-a-f]
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r13-r20-wave-a-f
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Repair stale public rustdoc links
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('crates/solverang/src/integrate/mod.rs')
+          s = p.read_text()
+          replacements = {
+              '[`step`] module': '`step` module',
+              '[PI (predictive) step-size controller](controller)': 'PI (predictive) step-size controller',
+              '[`IntegratorCoeffs::bdf`]': '`IntegratorCoeffs::bdf`',
+              '[`NumericError`]': '`NumericError`',
+              '[`EventBearing`](numeric_contracts::EventBearing)': '`EventBearing`',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'missing expected doc fragment: {old}')
+              s = s.replace(old, new)
+          p.write_text(s)
+          PY
+          cargo fmt --all
+      - name: Commit hygiene fixes
+        shell: bash
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates
+          git commit -m 'Fix formatting and stale integrator rustdoc links'
+          git push origin HEAD:agent/r13-r20-wave-a-f
