@@ -1,0 +1,1472 @@
+Diff in /home/runner/work/solverang/solverang/crates/anvil-compat/src/lib.rs:8:
+ 
+ use thiserror::Error;
+ 
+-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct Reg(pub u16);
+-impl Reg { pub fn new(index:u16)->Self{Self(index)} pub fn index(self)->u16{self.0} }
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct Reg(pub u16);
++impl Reg {
++    pub fn new(index: u16) -> Self {
++        Self(index)
++    }
++    pub fn index(self) -> u16 {
++        self.0
++    }
++}
+ 
+ #[derive(Clone, Debug, PartialEq)]
+ pub enum ConstraintOp {
+Diff in /home/runner/work/solverang/solverang/crates/anvil-compat/src/lib.rs:16:
+- LoadVar{dst:Reg,var_idx:u32}, LoadConst{dst:Reg,value:f64},
+- Add{dst:Reg,a:Reg,b:Reg},Sub{dst:Reg,a:Reg,b:Reg},Mul{dst:Reg,a:Reg,b:Reg},Div{dst:Reg,a:Reg,b:Reg},Neg{dst:Reg,src:Reg},
+- Sqrt{dst:Reg,src:Reg},Sin{dst:Reg,src:Reg},Cos{dst:Reg,src:Reg},Atan2{dst:Reg,y:Reg,x:Reg},Abs{dst:Reg,src:Reg},Max{dst:Reg,a:Reg,b:Reg},Min{dst:Reg,a:Reg,b:Reg},
+- Exp{dst:Reg,src:Reg},Ln{dst:Reg,src:Reg},Pow{dst:Reg,base:Reg,exp:Reg},Tan{dst:Reg,src:Reg},Asin{dst:Reg,src:Reg},Acos{dst:Reg,src:Reg},Sinh{dst:Reg,src:Reg},Cosh{dst:Reg,src:Reg},Tanh{dst:Reg,src:Reg},
+- StoreResidual{residual_idx:u32,src:Reg},StoreJacobianIndexed{output_idx:u32,src:Reg},StoreHessianIndexed{output_idx:u32,src:Reg},
++    LoadVar { dst: Reg, var_idx: u32 },
++    LoadConst { dst: Reg, value: f64 },
++    Add { dst: Reg, a: Reg, b: Reg },
++    Sub { dst: Reg, a: Reg, b: Reg },
++    Mul { dst: Reg, a: Reg, b: Reg },
++    Div { dst: Reg, a: Reg, b: Reg },
++    Neg { dst: Reg, src: Reg },
++    Sqrt { dst: Reg, src: Reg },
++    Sin { dst: Reg, src: Reg },
++    Cos { dst: Reg, src: Reg },
++    Atan2 { dst: Reg, y: Reg, x: Reg },
++    Abs { dst: Reg, src: Reg },
++    Max { dst: Reg, a: Reg, b: Reg },
++    Min { dst: Reg, a: Reg, b: Reg },
++    Exp { dst: Reg, src: Reg },
++    Ln { dst: Reg, src: Reg },
++    Pow { dst: Reg, base: Reg, exp: Reg },
++    Tan { dst: Reg, src: Reg },
++    Asin { dst: Reg, src: Reg },
++    Acos { dst: Reg, src: Reg },
++    Sinh { dst: Reg, src: Reg },
++    Cosh { dst: Reg, src: Reg },
++    Tanh { dst: Reg, src: Reg },
++    StoreResidual { residual_idx: u32, src: Reg },
++    StoreJacobianIndexed { output_idx: u32, src: Reg },
++    StoreHessianIndexed { output_idx: u32, src: Reg },
+ }
+ impl ConstraintOp {
+- pub fn uses_register(&self,r:Reg)->bool{match self{Self::LoadVar{..}|Self::LoadConst{..}=>false,Self::Add{a,b,..}|Self::Sub{a,b,..}|Self::Mul{a,b,..}|Self::Div{a,b,..}|Self::Max{a,b,..}|Self::Min{a,b,..}=>*a==r||*b==r,Self::Atan2{y,x,..}=>*y==r||*x==r,Self::Pow{base,exp,..}=>*base==r||*exp==r,Self::Neg{src,..}|Self::Sqrt{src,..}|Self::Sin{src,..}|Self::Cos{src,..}|Self::Abs{src,..}|Self::Exp{src,..}|Self::Ln{src,..}|Self::Tan{src,..}|Self::Asin{src,..}|Self::Acos{src,..}|Self::Sinh{src,..}|Self::Cosh{src,..}|Self::Tanh{src,..}|Self::StoreResidual{src,..}|Self::StoreJacobianIndexed{src,..}|Self::StoreHessianIndexed{src,..}=>*src==r}}
+- pub fn defines_register(&self,r:Reg)->bool{self.dst()==Some(r)}
+- fn dst(&self)->Option<Reg>{match self{Self::LoadVar{dst,..}|Self::LoadConst{dst,..}|Self::Add{dst,..}|Self::Sub{dst,..}|Self::Mul{dst,..}|Self::Div{dst,..}|Self::Neg{dst,..}|Self::Sqrt{dst,..}|Self::Sin{dst,..}|Self::Cos{dst,..}|Self::Atan2{dst,..}|Self::Abs{dst,..}|Self::Max{dst,..}|Self::Min{dst,..}|Self::Exp{dst,..}|Self::Ln{dst,..}|Self::Pow{dst,..}|Self::Tan{dst,..}|Self::Asin{dst,..}|Self::Acos{dst,..}|Self::Sinh{dst,..}|Self::Cosh{dst,..}|Self::Tanh{dst,..}=>Some(*dst),_=>None}}
++    pub fn uses_register(&self, r: Reg) -> bool {
++        match self {
++            Self::LoadVar { .. } | Self::LoadConst { .. } => false,
++            Self::Add { a, b, .. }
++            | Self::Sub { a, b, .. }
++            | Self::Mul { a, b, .. }
++            | Self::Div { a, b, .. }
++            | Self::Max { a, b, .. }
++            | Self::Min { a, b, .. } => *a == r || *b == r,
++            Self::Atan2 { y, x, .. } => *y == r || *x == r,
++            Self::Pow { base, exp, .. } => *base == r || *exp == r,
++            Self::Neg { src, .. }
++            | Self::Sqrt { src, .. }
++            | Self::Sin { src, .. }
++            | Self::Cos { src, .. }
++            | Self::Abs { src, .. }
++            | Self::Exp { src, .. }
++            | Self::Ln { src, .. }
++            | Self::Tan { src, .. }
++            | Self::Asin { src, .. }
++            | Self::Acos { src, .. }
++            | Self::Sinh { src, .. }
++            | Self::Cosh { src, .. }
++            | Self::Tanh { src, .. }
++            | Self::StoreResidual { src, .. }
++            | Self::StoreJacobianIndexed { src, .. }
++            | Self::StoreHessianIndexed { src, .. } => *src == r,
++        }
++    }
++    pub fn defines_register(&self, r: Reg) -> bool {
++        self.dst() == Some(r)
++    }
++    fn dst(&self) -> Option<Reg> {
++        match self {
++            Self::LoadVar { dst, .. }
++            | Self::LoadConst { dst, .. }
++            | Self::Add { dst, .. }
++            | Self::Sub { dst, .. }
++            | Self::Mul { dst, .. }
++            | Self::Div { dst, .. }
++            | Self::Neg { dst, .. }
++            | Self::Sqrt { dst, .. }
++            | Self::Sin { dst, .. }
++            | Self::Cos { dst, .. }
++            | Self::Atan2 { dst, .. }
++            | Self::Abs { dst, .. }
++            | Self::Max { dst, .. }
++            | Self::Min { dst, .. }
++            | Self::Exp { dst, .. }
++            | Self::Ln { dst, .. }
++            | Self::Pow { dst, .. }
++            | Self::Tan { dst, .. }
++            | Self::Asin { dst, .. }
++            | Self::Acos { dst, .. }
++            | Self::Sinh { dst, .. }
++            | Self::Cosh { dst, .. }
++            | Self::Tanh { dst, .. } => Some(*dst),
++            _ => None,
++        }
++    }
+ }
+ 
+-#[derive(Clone,Copy,Debug,PartialEq)]pub struct JacobianEntry{pub row:u32,pub col:u32}
+-#[derive(Clone,Copy,Debug,PartialEq)]pub struct HessianEntry{pub row:u32,pub col:u32}
+-#[derive(Clone,Debug)]pub struct CompiledConstraints{pub residual_ops:Vec<ConstraintOp>,pub jacobian_ops:Vec<ConstraintOp>,pub hessian_ops:Vec<ConstraintOp>,pub n_residuals:usize,pub n_vars:usize,pub jacobian_nnz:usize,pub jacobian_pattern:Vec<JacobianEntry>,pub hessian_nnz:usize,pub hessian_pattern:Vec<HessianEntry>,pub max_register:u16}
+-impl CompiledConstraints{
+- pub fn new(n_vars:usize,n_residuals:usize)->Self{Self{residual_ops:vec![],jacobian_ops:vec![],hessian_ops:vec![],n_residuals,n_vars,jacobian_nnz:0,jacobian_pattern:vec![],hessian_nnz:0,hessian_pattern:vec![],max_register:0}}
+- pub fn total_ops(&self)->usize{self.residual_ops.len()+self.jacobian_ops.len()+self.hessian_ops.len()}
+- pub fn validate(&self)->Result<(),ValidationError>{for op in self.residual_ops.iter().chain(&self.jacobian_ops).chain(&self.hessian_ops){if let ConstraintOp::LoadVar{var_idx,..}=op{if *var_idx as usize>=self.n_vars{return Err(ValidationError::VariableIndexOutOfBounds)}}}for op in &self.residual_ops{if let ConstraintOp::StoreResidual{residual_idx,..}=op{if *residual_idx as usize>=self.n_residuals{return Err(ValidationError::ResidualIndexOutOfBounds)}}}if self.jacobian_nnz!=self.jacobian_pattern.len(){return Err(ValidationError::JacobianPatternMismatch)}if self.hessian_nnz!=self.hessian_pattern.len(){return Err(ValidationError::HessianPatternMismatch)}Ok(())}
+- pub fn densify_jacobian_ops(&self,n_rows:usize)->Vec<ConstraintOp>{self.jacobian_ops.iter().map(|op|match op{ConstraintOp::StoreJacobianIndexed{output_idx,src}=>{let e=self.jacobian_pattern[*output_idx as usize];ConstraintOp::StoreJacobianIndexed{output_idx:(e.col as usize*n_rows+e.row as usize)as u32,src:*src}},x=>x.clone()}).collect()}
+- pub fn fuse_ops(&self)->(Vec<ConstraintOp>,u16){let mut out=self.residual_ops.clone();out.extend(self.jacobian_ops.clone());let max=out.iter().filter_map(ConstraintOp::dst).map(|r|r.0).max().unwrap_or(0);(out,max)}
+- pub fn fuse_ops_dense(&self,n_rows:usize)->(Vec<ConstraintOp>,u16){let mut out=self.residual_ops.clone();out.extend(self.densify_jacobian_ops(n_rows));let max=out.iter().filter_map(ConstraintOp::dst).map(|r|r.0).max().unwrap_or(0);(out,max)}
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct JacobianEntry {
++    pub row: u32,
++    pub col: u32,
+ }
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct HessianEntry {
++    pub row: u32,
++    pub col: u32,
++}
++#[derive(Clone, Debug)]
++pub struct CompiledConstraints {
++    pub residual_ops: Vec<ConstraintOp>,
++    pub jacobian_ops: Vec<ConstraintOp>,
++    pub hessian_ops: Vec<ConstraintOp>,
++    pub n_residuals: usize,
++    pub n_vars: usize,
++    pub jacobian_nnz: usize,
++    pub jacobian_pattern: Vec<JacobianEntry>,
++    pub hessian_nnz: usize,
++    pub hessian_pattern: Vec<HessianEntry>,
++    pub max_register: u16,
++}
++impl CompiledConstraints {
++    pub fn new(n_vars: usize, n_residuals: usize) -> Self {
++        Self {
++            residual_ops: vec![],
++            jacobian_ops: vec![],
++            hessian_ops: vec![],
++            n_residuals,
++            n_vars,
++            jacobian_nnz: 0,
++            jacobian_pattern: vec![],
++            hessian_nnz: 0,
++            hessian_pattern: vec![],
++            max_register: 0,
++        }
++    }
++    pub fn total_ops(&self) -> usize {
++        self.residual_ops.len() + self.jacobian_ops.len() + self.hessian_ops.len()
++    }
++    pub fn validate(&self) -> Result<(), ValidationError> {
++        for op in self
++            .residual_ops
++            .iter()
++            .chain(&self.jacobian_ops)
++            .chain(&self.hessian_ops)
++        {
++            if let ConstraintOp::LoadVar { var_idx, .. } = op {
++                if *var_idx as usize >= self.n_vars {
++                    return Err(ValidationError::VariableIndexOutOfBounds);
++                }
++            }
++        }
++        for op in &self.residual_ops {
++            if let ConstraintOp::StoreResidual { residual_idx, .. } = op {
++                if *residual_idx as usize >= self.n_residuals {
++                    return Err(ValidationError::ResidualIndexOutOfBounds);
++                }
++            }
++        }
++        if self.jacobian_nnz != self.jacobian_pattern.len() {
++            return Err(ValidationError::JacobianPatternMismatch);
++        }
++        if self.hessian_nnz != self.hessian_pattern.len() {
++            return Err(ValidationError::HessianPatternMismatch);
++        }
++        Ok(())
++    }
++    pub fn densify_jacobian_ops(&self, n_rows: usize) -> Vec<ConstraintOp> {
++        self.jacobian_ops
++            .iter()
++            .map(|op| match op {
++                ConstraintOp::StoreJacobianIndexed { output_idx, src } => {
++                    let e = self.jacobian_pattern[*output_idx as usize];
++                    ConstraintOp::StoreJacobianIndexed {
++                        output_idx: (e.col as usize * n_rows + e.row as usize) as u32,
++                        src: *src,
++                    }
++                }
++                x => x.clone(),
++            })
++            .collect()
++    }
++    pub fn fuse_ops(&self) -> (Vec<ConstraintOp>, u16) {
++        let mut out = self.residual_ops.clone();
++        out.extend(self.jacobian_ops.clone());
++        let max = out
++            .iter()
++            .filter_map(ConstraintOp::dst)
++            .map(|r| r.0)
++            .max()
++            .unwrap_or(0);
++        (out, max)
++    }
++    pub fn fuse_ops_dense(&self, n_rows: usize) -> (Vec<ConstraintOp>, u16) {
++        let mut out = self.residual_ops.clone();
++        out.extend(self.densify_jacobian_ops(n_rows));
++        let max = out
++            .iter()
++            .filter_map(ConstraintOp::dst)
++            .map(|r| r.0)
++            .max()
++            .unwrap_or(0);
++        (out, max)
++    }
++}
+ 
+-#[derive(Clone,Debug,PartialEq,Error)]pub enum ValidationError{#[error("residual index out of bounds")]ResidualIndexOutOfBounds,#[error("variable index out of bounds")]VariableIndexOutOfBounds,#[error("Jacobian pattern mismatch")]JacobianPatternMismatch,#[error("Hessian pattern mismatch")]HessianPatternMismatch}
++#[derive(Clone, Debug, PartialEq, Error)]
++pub enum ValidationError {
++    #[error("residual index out of bounds")]
++    ResidualIndexOutOfBounds,
++    #[error("variable index out of bounds")]
++    VariableIndexOutOfBounds,
++    #[error("Jacobian pattern mismatch")]
++    JacobianPatternMismatch,
++    #[error("Hessian pattern mismatch")]
++    HessianPatternMismatch,
++}
+ 
+-#[derive(Debug,Default)]pub struct OpcodeEmitter{ops:Vec<ConstraintOp>,next:u16,jac:Vec<JacobianEntry>,hess:Vec<HessianEntry>,current:u32}
+-impl OpcodeEmitter{
+- pub fn new()->Self{Self::default()}fn reg(&mut self)->Reg{let r=Reg(self.next);self.next+=1;r}pub fn max_register(&self)->u16{self.next.saturating_sub(1)}pub fn ops(&self)->&[ConstraintOp]{&self.ops}pub fn into_ops(self)->Vec<ConstraintOp>{self.ops}pub fn set_residual_index(&mut self,i:u32){self.current=i}pub fn jacobian_entries(&self)->&[JacobianEntry]{&self.jac}pub fn take_jacobian_entries(&mut self)->Vec<JacobianEntry>{std::mem::take(&mut self.jac)}pub fn take_hessian_entries(&mut self)->Vec<HessianEntry>{std::mem::take(&mut self.hess)}
+- pub fn load_var(&mut self,i:u32)->Reg{let d=self.reg();self.ops.push(ConstraintOp::LoadVar{dst:d,var_idx:i});d}pub fn const_f64(&mut self,v:f64)->Reg{let d=self.reg();self.ops.push(ConstraintOp::LoadConst{dst:d,value:v});d}pub fn zero(&mut self)->Reg{self.const_f64(0.)}pub fn one(&mut self)->Reg{self.const_f64(1.)}
++#[derive(Debug, Default)]
++pub struct OpcodeEmitter {
++    ops: Vec<ConstraintOp>,
++    next: u16,
++    jac: Vec<JacobianEntry>,
++    hess: Vec<HessianEntry>,
++    current: u32,
+ }
+-macro_rules! bin {($n:ident,$v:ident)=>{pub fn $n(&mut self,a:Reg,b:Reg)->Reg{let d=self.reg();self.ops.push(ConstraintOp::$v{dst:d,a,b});d}};}
+-macro_rules! una {($n:ident,$v:ident)=>{pub fn $n(&mut self,src:Reg)->Reg{let d=self.reg();self.ops.push(ConstraintOp::$v{dst:d,src});d}};}
+-impl OpcodeEmitter{bin!(add,Add);bin!(sub,Sub);bin!(mul,Mul);bin!(div,Div);bin!(max,Max);bin!(min,Min);una!(neg,Neg);una!(sqrt,Sqrt);una!(sin,Sin);una!(cos,Cos);una!(abs,Abs);una!(exp,Exp);una!(ln,Ln);una!(tan,Tan);una!(asin,Asin);una!(acos,Acos);una!(sinh,Sinh);una!(cosh,Cosh);una!(tanh,Tanh);
+- pub fn atan2(&mut self,y:Reg,x:Reg)->Reg{let d=self.reg();self.ops.push(ConstraintOp::Atan2{dst:d,y,x});d}pub fn pow(&mut self,base:Reg,exp:Reg)->Reg{let d=self.reg();self.ops.push(ConstraintOp::Pow{dst:d,base,exp});d}pub fn square(&mut self,x:Reg)->Reg{self.mul(x,x)}pub fn safe_distance(&mut self,x:Reg,e:f64)->Reg{let d=self.sqrt(x);let e=self.const_f64(e);self.max(d,e)}
+- pub fn store_residual(&mut self,i:u32,src:Reg){self.ops.push(ConstraintOp::StoreResidual{residual_idx:i,src})}pub fn store_jacobian(&mut self,row:u32,col:u32,src:Reg){let i=self.jac.len()as u32;self.jac.push(JacobianEntry{row,col});self.ops.push(ConstraintOp::StoreJacobianIndexed{output_idx:i,src})}pub fn store_jacobian_current(&mut self,col:u32,src:Reg){self.store_jacobian(self.current,col,src)}pub fn store_hessian(&mut self,row:u32,col:u32,src:Reg){let i=self.hess.len()as u32;self.hess.push(HessianEntry{row,col});self.ops.push(ConstraintOp::StoreHessianIndexed{output_idx:i,src})}}
++impl OpcodeEmitter {
++    pub fn new() -> Self {
++        Self::default()
++    }
++    fn reg(&mut self) -> Reg {
++        let r = Reg(self.next);
++        self.next += 1;
++        r
++    }
++    pub fn max_register(&self) -> u16 {
++        self.next.saturating_sub(1)
++    }
++    pub fn ops(&self) -> &[ConstraintOp] {
++        &self.ops
++    }
++    pub fn into_ops(self) -> Vec<ConstraintOp> {
++        self.ops
++    }
++    pub fn set_residual_index(&mut self, i: u32) {
++        self.current = i
++    }
++    pub fn jacobian_entries(&self) -> &[JacobianEntry] {
++        &self.jac
++    }
++    pub fn take_jacobian_entries(&mut self) -> Vec<JacobianEntry> {
++        std::mem::take(&mut self.jac)
++    }
++    pub fn take_hessian_entries(&mut self) -> Vec<HessianEntry> {
++        std::mem::take(&mut self.hess)
++    }
++    pub fn load_var(&mut self, i: u32) -> Reg {
++        let d = self.reg();
++        self.ops.push(ConstraintOp::LoadVar { dst: d, var_idx: i });
++        d
++    }
++    pub fn const_f64(&mut self, v: f64) -> Reg {
++        let d = self.reg();
++        self.ops.push(ConstraintOp::LoadConst { dst: d, value: v });
++        d
++    }
++    pub fn zero(&mut self) -> Reg {
++        self.const_f64(0.)
++    }
++    pub fn one(&mut self) -> Reg {
++        self.const_f64(1.)
++    }
++}
++macro_rules! bin {
++    ($n:ident,$v:ident) => {
++        pub fn $n(&mut self, a: Reg, b: Reg) -> Reg {
++            let d = self.reg();
++            self.ops.push(ConstraintOp::$v { dst: d, a, b });
++            d
++        }
++    };
++}
++macro_rules! una {
++    ($n:ident,$v:ident) => {
++        pub fn $n(&mut self, src: Reg) -> Reg {
++            let d = self.reg();
++            self.ops.push(ConstraintOp::$v { dst: d, src });
++            d
++        }
++    };
++}
++impl OpcodeEmitter {
++    bin!(add, Add);
++    bin!(sub, Sub);
++    bin!(mul, Mul);
++    bin!(div, Div);
++    bin!(max, Max);
++    bin!(min, Min);
++    una!(neg, Neg);
++    una!(sqrt, Sqrt);
++    una!(sin, Sin);
++    una!(cos, Cos);
++    una!(abs, Abs);
++    una!(exp, Exp);
++    una!(ln, Ln);
++    una!(tan, Tan);
++    una!(asin, Asin);
++    una!(acos, Acos);
++    una!(sinh, Sinh);
++    una!(cosh, Cosh);
++    una!(tanh, Tanh);
++    pub fn atan2(&mut self, y: Reg, x: Reg) -> Reg {
++        let d = self.reg();
++        self.ops.push(ConstraintOp::Atan2 { dst: d, y, x });
++        d
++    }
++    pub fn pow(&mut self, base: Reg, exp: Reg) -> Reg {
++        let d = self.reg();
++        self.ops.push(ConstraintOp::Pow { dst: d, base, exp });
++        d
++    }
++    pub fn square(&mut self, x: Reg) -> Reg {
++        self.mul(x, x)
++    }
++    pub fn safe_distance(&mut self, x: Reg, e: f64) -> Reg {
++        let d = self.sqrt(x);
++        let e = self.const_f64(e);
++        self.max(d, e)
++    }
++    pub fn store_residual(&mut self, i: u32, src: Reg) {
++        self.ops.push(ConstraintOp::StoreResidual {
++            residual_idx: i,
++            src,
++        })
++    }
++    pub fn store_jacobian(&mut self, row: u32, col: u32, src: Reg) {
++        let i = self.jac.len() as u32;
++        self.jac.push(JacobianEntry { row, col });
++        self.ops
++            .push(ConstraintOp::StoreJacobianIndexed { output_idx: i, src })
++    }
++    pub fn store_jacobian_current(&mut self, col: u32, src: Reg) {
++        self.store_jacobian(self.current, col, src)
++    }
++    pub fn store_hessian(&mut self, row: u32, col: u32, src: Reg) {
++        let i = self.hess.len() as u32;
++        self.hess.push(HessianEntry { row, col });
++        self.ops
++            .push(ConstraintOp::StoreHessianIndexed { output_idx: i, src })
++    }
++}
+ 
+-#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]pub enum JitMode{#[default]Auto,ForceJit,ForceInterpreted}
+-#[derive(Clone,Debug)]pub struct JITConfig{pub jit_threshold:usize,pub estimated_iterations:usize,pub max_iterations:usize,pub tolerance:f64,pub mode:JitMode}
+-impl Default for JITConfig{fn default()->Self{Self{jit_threshold:1000,estimated_iterations:50,max_iterations:200,tolerance:1e-8,mode:JitMode::Auto}}}
+-impl JITConfig{pub fn always_jit()->Self{Self{mode:JitMode::ForceJit,..Default::default()}}pub fn always_interpreted()->Self{Self{mode:JitMode::ForceInterpreted,..Default::default()}}pub fn for_large_problems()->Self{Self{jit_threshold:500,max_iterations:500,tolerance:1e-10,..Default::default()}}}
+-pub fn jit_available()->bool{true}
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum JitMode {
++    #[default]
++    Auto,
++    ForceJit,
++    ForceInterpreted,
++}
++#[derive(Clone, Debug)]
++pub struct JITConfig {
++    pub jit_threshold: usize,
++    pub estimated_iterations: usize,
++    pub max_iterations: usize,
++    pub tolerance: f64,
++    pub mode: JitMode,
++}
++impl Default for JITConfig {
++    fn default() -> Self {
++        Self {
++            jit_threshold: 1000,
++            estimated_iterations: 50,
++            max_iterations: 200,
++            tolerance: 1e-8,
++            mode: JitMode::Auto,
++        }
++    }
++}
++impl JITConfig {
++    pub fn always_jit() -> Self {
++        Self {
++            mode: JitMode::ForceJit,
++            ..Default::default()
++        }
++    }
++    pub fn always_interpreted() -> Self {
++        Self {
++            mode: JitMode::ForceInterpreted,
++            ..Default::default()
++        }
++    }
++    pub fn for_large_problems() -> Self {
++        Self {
++            jit_threshold: 500,
++            max_iterations: 500,
++            tolerance: 1e-10,
++            ..Default::default()
++        }
++    }
++}
++pub fn jit_available() -> bool {
++    true
++}
+ 
+-#[derive(Clone,Debug,Error)]pub enum JITError{#[error("JIT backend is not available")]NotAvailable,#[error("invalid compiled constraints: {0}")]Validation(String),#[error("execution error: {0}")]Execution(String)}
++#[derive(Clone, Debug, Error)]
++pub enum JITError {
++    #[error("JIT backend is not available")]
++    NotAvailable,
++    #[error("invalid compiled constraints: {0}")]
++    Validation(String),
++    #[error("execution error: {0}")]
++    Execution(String),
++}
+ 
+ pub struct JITCompiler;
+-impl JITCompiler{pub fn new()->Result<Self,JITError>{Ok(Self)}pub fn compile(&mut self,c:&CompiledConstraints)->Result<JITFunction,JITError>{c.validate().map_err(|e|JITError::Validation(e.to_string()))?;Ok(JITFunction{compiled:c.clone()})}}
++impl JITCompiler {
++    pub fn new() -> Result<Self, JITError> {
++        Ok(Self)
++    }
++    pub fn compile(&mut self, c: &CompiledConstraints) -> Result<JITFunction, JITError> {
++        c.validate()
++            .map_err(|e| JITError::Validation(e.to_string()))?;
++        Ok(JITFunction {
++            compiled: c.clone(),
++        })
++    }
++}
+ 
+-#[derive(Clone, Debug)]pub struct JITFunction{compiled:CompiledConstraints}
+-impl JITFunction{
+- pub fn variable_count(&self)->usize{self.compiled.n_vars}pub fn residual_count(&self)->usize{self.compiled.n_residuals}
+- pub fn evaluate_residuals(&self,vars:&[f64],out:&mut[f64]){run(&self.compiled.residual_ops,self.compiled.max_register,vars,Some(out),None,None)}
+- pub fn evaluate_jacobian(&self,vars:&[f64],out:&mut[f64]){run(&self.compiled.jacobian_ops,self.compiled.max_register,vars,None,Some(out),None)}
+- pub fn evaluate_hessian(&self,vars:&[f64],out:&mut[f64]){run(&self.compiled.hessian_ops,self.compiled.max_register,vars,None,None,Some(out))}
+- pub fn evaluate_both(&self,vars:&[f64],residual:&mut[f64],jacobian:&mut[f64]){self.evaluate_residuals(vars,residual);self.evaluate_jacobian(vars,jacobian)}
+- pub fn evaluate_both_dense(&self,vars:&[f64],residual:&mut[f64],dense_jacobian:&mut[f64]){self.evaluate_residuals(vars,residual);let ops=self.compiled.densify_jacobian_ops(self.compiled.n_residuals);run(&ops,self.compiled.max_register,vars,None,Some(dense_jacobian),None)}
++#[derive(Clone, Debug)]
++pub struct JITFunction {
++    compiled: CompiledConstraints,
+ }
++impl JITFunction {
++    pub fn variable_count(&self) -> usize {
++        self.compiled.n_vars
++    }
++    pub fn residual_count(&self) -> usize {
++        self.compiled.n_residuals
++    }
++    pub fn evaluate_residuals(&self, vars: &[f64], out: &mut [f64]) {
++        run(
++            &self.compiled.residual_ops,
++            self.compiled.max_register,
++            vars,
++            Some(out),
++            None,
++            None,
++        )
++    }
++    pub fn evaluate_jacobian(&self, vars: &[f64], out: &mut [f64]) {
++        run(
++            &self.compiled.jacobian_ops,
++            self.compiled.max_register,
++            vars,
++            None,
++            Some(out),
++            None,
++        )
++    }
++    pub fn evaluate_hessian(&self, vars: &[f64], out: &mut [f64]) {
++        run(
++            &self.compiled.hessian_ops,
++            self.compiled.max_register,
++            vars,
++            None,
++            None,
++            Some(out),
++        )
++    }
++    pub fn evaluate_both(&self, vars: &[f64], residual: &mut [f64], jacobian: &mut [f64]) {
++        self.evaluate_residuals(vars, residual);
++        self.evaluate_jacobian(vars, jacobian)
++    }
++    pub fn evaluate_both_dense(
++        &self,
++        vars: &[f64],
++        residual: &mut [f64],
++        dense_jacobian: &mut [f64],
++    ) {
++        self.evaluate_residuals(vars, residual);
++        let ops = self
++            .compiled
++            .densify_jacobian_ops(self.compiled.n_residuals);
++        run(
++            &ops,
++            self.compiled.max_register,
++            vars,
++            None,
++            Some(dense_jacobian),
++            None,
++        )
++    }
++}
+ 
+-fn run(ops:&[ConstraintOp],max:u16,vars:&[f64],mut residual:Option<&mut[f64]>,mut jac:Option<&mut[f64]>,mut hess:Option<&mut[f64]>){let mut r=vec![0.;max as usize+1];for op in ops{match*op{ConstraintOp::LoadVar{dst,var_idx}=>r[dst.0 as usize]=vars.get(var_idx as usize).copied().unwrap_or(f64::NAN),ConstraintOp::LoadConst{dst,value}=>r[dst.0 as usize]=value,ConstraintOp::Add{dst,a,b}=>r[dst.0 as usize]=r[a.0 as usize]+r[b.0 as usize],ConstraintOp::Sub{dst,a,b}=>r[dst.0 as usize]=r[a.0 as usize]-r[b.0 as usize],ConstraintOp::Mul{dst,a,b}=>r[dst.0 as usize]=r[a.0 as usize]*r[b.0 as usize],ConstraintOp::Div{dst,a,b}=>r[dst.0 as usize]=r[a.0 as usize]/r[b.0 as usize],ConstraintOp::Neg{dst,src}=>r[dst.0 as usize]=-r[src.0 as usize],ConstraintOp::Sqrt{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].sqrt(),ConstraintOp::Sin{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].sin(),ConstraintOp::Cos{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].cos(),ConstraintOp::Atan2{dst,y,x}=>r[dst.0 as usize]=r[y.0 as usize].atan2(r[x.0 as usize]),ConstraintOp::Abs{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].abs(),ConstraintOp::Max{dst,a,b}=>r[dst.0 as usize]=r[a.0 as usize].max(r[b.0 as usize]),ConstraintOp::Min{dst,a,b}=>r[dst.0 as usize]=r[a.0 as usize].min(r[b.0 as usize]),ConstraintOp::Exp{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].exp(),ConstraintOp::Ln{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].ln(),ConstraintOp::Pow{dst,base,exp}=>r[dst.0 as usize]=r[base.0 as usize].powf(r[exp.0 as usize]),ConstraintOp::Tan{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].tan(),ConstraintOp::Asin{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].asin(),ConstraintOp::Acos{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].acos(),ConstraintOp::Sinh{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].sinh(),ConstraintOp::Cosh{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].cosh(),ConstraintOp::Tanh{dst,src}=>r[dst.0 as usize]=r[src.0 as usize].tanh(),ConstraintOp::StoreResidual{residual_idx,src}=>if let Some(o)=residual.as_deref_mut(){if let Some(x)=o.get_mut(residual_idx as usize){*x=r[src.0 as usize]}},ConstraintOp::StoreJacobianIndexed{output_idx,src}=>if let Some(o)=jac.as_deref_mut(){if let Some(x)=o.get_mut(output_idx as usize){*x=r[src.0 as usize]}},ConstraintOp::StoreHessianIndexed{output_idx,src}=>if let Some(o)=hess.as_deref_mut(){if let Some(x)=o.get_mut(output_idx as usize){*x=r[src.0 as usize]}}}}}
++fn run(
++    ops: &[ConstraintOp],
++    max: u16,
++    vars: &[f64],
++    mut residual: Option<&mut [f64]>,
++    mut jac: Option<&mut [f64]>,
++    mut hess: Option<&mut [f64]>,
++) {
++    let mut r = vec![0.; max as usize + 1];
++    for op in ops {
++        match *op {
++            ConstraintOp::LoadVar { dst, var_idx } => {
++                r[dst.0 as usize] = vars.get(var_idx as usize).copied().unwrap_or(f64::NAN)
++            }
++            ConstraintOp::LoadConst { dst, value } => r[dst.0 as usize] = value,
++            ConstraintOp::Add { dst, a, b } => {
++                r[dst.0 as usize] = r[a.0 as usize] + r[b.0 as usize]
++            }
++            ConstraintOp::Sub { dst, a, b } => {
++                r[dst.0 as usize] = r[a.0 as usize] - r[b.0 as usize]
++            }
++            ConstraintOp::Mul { dst, a, b } => {
++                r[dst.0 as usize] = r[a.0 as usize] * r[b.0 as usize]
++            }
++            ConstraintOp::Div { dst, a, b } => {
++                r[dst.0 as usize] = r[a.0 as usize] / r[b.0 as usize]
++            }
++            ConstraintOp::Neg { dst, src } => r[dst.0 as usize] = -r[src.0 as usize],
++            ConstraintOp::Sqrt { dst, src } => r[dst.0 as usize] = r[src.0 as usize].sqrt(),
++            ConstraintOp::Sin { dst, src } => r[dst.0 as usize] = r[src.0 as usize].sin(),
++            ConstraintOp::Cos { dst, src } => r[dst.0 as usize] = r[src.0 as usize].cos(),
++            ConstraintOp::Atan2 { dst, y, x } => {
++                r[dst.0 as usize] = r[y.0 as usize].atan2(r[x.0 as usize])
++            }
++            ConstraintOp::Abs { dst, src } => r[dst.0 as usize] = r[src.0 as usize].abs(),
++            ConstraintOp::Max { dst, a, b } => {
++                r[dst.0 as usize] = r[a.0 as usize].max(r[b.0 as usize])
++            }
++            ConstraintOp::Min { dst, a, b } => {
++                r[dst.0 as usize] = r[a.0 as usize].min(r[b.0 as usize])
++            }
++            ConstraintOp::Exp { dst, src } => r[dst.0 as usize] = r[src.0 as usize].exp(),
++            ConstraintOp::Ln { dst, src } => r[dst.0 as usize] = r[src.0 as usize].ln(),
++            ConstraintOp::Pow { dst, base, exp } => {
++                r[dst.0 as usize] = r[base.0 as usize].powf(r[exp.0 as usize])
++            }
++            ConstraintOp::Tan { dst, src } => r[dst.0 as usize] = r[src.0 as usize].tan(),
++            ConstraintOp::Asin { dst, src } => r[dst.0 as usize] = r[src.0 as usize].asin(),
++            ConstraintOp::Acos { dst, src } => r[dst.0 as usize] = r[src.0 as usize].acos(),
++            ConstraintOp::Sinh { dst, src } => r[dst.0 as usize] = r[src.0 as usize].sinh(),
++            ConstraintOp::Cosh { dst, src } => r[dst.0 as usize] = r[src.0 as usize].cosh(),
++            ConstraintOp::Tanh { dst, src } => r[dst.0 as usize] = r[src.0 as usize].tanh(),
++            ConstraintOp::StoreResidual { residual_idx, src } => {
++                if let Some(o) = residual.as_deref_mut() {
++                    if let Some(x) = o.get_mut(residual_idx as usize) {
++                        *x = r[src.0 as usize]
++                    }
++                }
++            }
++            ConstraintOp::StoreJacobianIndexed { output_idx, src } => {
++                if let Some(o) = jac.as_deref_mut() {
++                    if let Some(x) = o.get_mut(output_idx as usize) {
++                        *x = r[src.0 as usize]
++                    }
++                }
++            }
++            ConstraintOp::StoreHessianIndexed { output_idx, src } => {
++                if let Some(o) = hess.as_deref_mut() {
++                    if let Some(x) = o.get_mut(output_idx as usize) {
++                        *x = r[src.0 as usize]
++                    }
++                }
++            }
++        }
++    }
++}
+ 
+-#[derive(Clone,Debug,Default)]pub struct CompiledNewtonStep;
++#[derive(Clone, Debug, Default)]
++pub struct CompiledNewtonStep;
+ 
+Diff in /home/runner/work/solverang/solverang/crates/contracts/src/lib.rs:8:
+ /// Solver execution context. Physics/runtime systems may wrap richer contexts around this
+ /// seam; Solverang itself only requires an explicit value instead of ambient global state.
+ #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+-pub struct Ctx { #[serde(default)] pub reproducible: bool }
+-impl Ctx { pub fn real_os_default() -> Self { Self { reproducible: false } } pub fn reproducible() -> Self { Self { reproducible: true } } }
++pub struct Ctx {
++    #[serde(default)]
++    pub reproducible: bool,
++}
++impl Ctx {
++    pub fn real_os_default() -> Self {
++        Self {
++            reproducible: false,
++        }
++    }
++    pub fn reproducible() -> Self {
++        Self { reproducible: true }
++    }
++}
+ 
+ #[derive(Clone, Debug, PartialEq, Error, Serialize, Deserialize)]
+ pub enum NumericError {
+Diff in /home/runner/work/solverang/solverang/crates/contracts/src/lib.rs:16:
+-    #[error("dimension mismatch: expected {expected}, got {got}")] DimensionMismatch { expected: usize, got: usize },
+-    #[error("non-finite numerical value: {what}")] NonFinite { what: String },
+-    #[error("singular operator: {what}")] Singular { what: String },
+-    #[error("unsupported numerical operation: {what}")] Unsupported { what: String },
+-    #[error("numerical backend failure: {message}")] Backend { message: String },
++    #[error("dimension mismatch: expected {expected}, got {got}")]
++    DimensionMismatch { expected: usize, got: usize },
++    #[error("non-finite numerical value: {what}")]
++    NonFinite { what: String },
++    #[error("singular operator: {what}")]
++    Singular { what: String },
++    #[error("unsupported numerical operation: {what}")]
++    Unsupported { what: String },
++    #[error("numerical backend failure: {message}")]
++    Backend { message: String },
+ }
+ 
+-pub trait Scalar: Copy + Send + Sync + 'static + PartialEq + core::ops::Add<Output=Self> + core::ops::Sub<Output=Self> + core::ops::Mul<Output=Self> + core::ops::Neg<Output=Self> + core::ops::AddAssign + core::ops::SubAssign {
+-    fn zero() -> Self; fn one() -> Self;
++pub trait Scalar:
++    Copy
++    + Send
++    + Sync
++    + 'static
++    + PartialEq
++    + core::ops::Add<Output = Self>
++    + core::ops::Sub<Output = Self>
++    + core::ops::Mul<Output = Self>
++    + core::ops::Neg<Output = Self>
++    + core::ops::AddAssign
++    + core::ops::SubAssign
++{
++    fn zero() -> Self;
++    fn one() -> Self;
+ }
+-impl Scalar for f64 { fn zero()->Self{0.0} fn one()->Self{1.0} }
++impl Scalar for f64 {
++    fn zero() -> Self {
++        0.0
++    }
++    fn one() -> Self {
++        1.0
++    }
++}
+ 
+-pub trait SparseIndex: Copy + Ord + Send + Sync + 'static { fn from_usize(i:usize)->Self; fn to_usize(self)->usize; }
+-impl SparseIndex for u32 { fn from_usize(i:usize)->Self{i as u32} fn to_usize(self)->usize{self as usize} }
+-impl SparseIndex for u64 { fn from_usize(i:usize)->Self{i as u64} fn to_usize(self)->usize{self as usize} }
+-impl SparseIndex for usize { fn from_usize(i:usize)->Self{i} fn to_usize(self)->usize{self} }
++pub trait SparseIndex: Copy + Ord + Send + Sync + 'static {
++    fn from_usize(i: usize) -> Self;
++    fn to_usize(self) -> usize;
++}
++impl SparseIndex for u32 {
++    fn from_usize(i: usize) -> Self {
++        i as u32
++    }
++    fn to_usize(self) -> usize {
++        self as usize
++    }
++}
++impl SparseIndex for u64 {
++    fn from_usize(i: usize) -> Self {
++        i as u64
++    }
++    fn to_usize(self) -> usize {
++        self as usize
++    }
++}
++impl SparseIndex for usize {
++    fn from_usize(i: usize) -> Self {
++        i
++    }
++    fn to_usize(self) -> usize {
++        self
++    }
++}
+ 
+-#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash,Serialize,Deserialize)]pub enum Orientation{Csr,Csc}
+-#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash,Serialize,Deserialize)]pub enum SortOrder{Unsorted,InnerSorted,Canonical}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
++pub enum Orientation {
++    Csr,
++    Csc,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
++pub enum SortOrder {
++    Unsorted,
++    InnerSorted,
++    Canonical,
++}
+ 
+-#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
+-pub struct SparsePattern<I=u32>{pub nrows:usize,pub ncols:usize,pub orientation:Orientation,pub offsets:Vec<I>,pub indices:Vec<I>,pub order:SortOrder}
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
++pub struct SparsePattern<I = u32> {
++    pub nrows: usize,
++    pub ncols: usize,
++    pub orientation: Orientation,
++    pub offsets: Vec<I>,
++    pub indices: Vec<I>,
++    pub order: SortOrder,
++}
+ 
+-#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+-pub struct SparseMatrix<S,I=u32>{pub pattern:Arc<SparsePattern<I>>,pub values:Vec<S>}
+-impl<S,I> SparseMatrix<S,I>{pub fn nnz(&self)->usize{self.values.len()} pub fn nrows(&self)->usize{self.pattern.nrows}pub fn ncols(&self)->usize{self.pattern.ncols}}
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++pub struct SparseMatrix<S, I = u32> {
++    pub pattern: Arc<SparsePattern<I>>,
++    pub values: Vec<S>,
++}
++impl<S, I> SparseMatrix<S, I> {
++    pub fn nnz(&self) -> usize {
++        self.values.len()
++    }
++    pub fn nrows(&self) -> usize {
++        self.pattern.nrows
++    }
++    pub fn ncols(&self) -> usize {
++        self.pattern.ncols
++    }
++}
+ 
+-#[derive(Clone,Debug)]pub struct CooMatrix<S>{nrows:usize,ncols:usize,entries:Vec<(usize,usize,S)>}
+-impl<S:Scalar>CooMatrix<S>{
+-    pub fn new(nrows:usize,ncols:usize)->Self{Self{nrows,ncols,entries:vec![]}}
+-    pub fn with_capacity(nrows:usize,ncols:usize,capacity:usize)->Self{Self{nrows,ncols,entries:Vec::with_capacity(capacity)}}
+-    pub fn push(&mut self,row:usize,col:usize,value:S){self.entries.push((row,col,value))}
+-    pub fn finish_csr(self)->SparseMatrix<S>{self.compress(Orientation::Csr)}
+-    pub fn finish_csc(self)->SparseMatrix<S>{self.compress(Orientation::Csc)}
+-    fn compress(mut self,orientation:Orientation)->SparseMatrix<S>{
+-        match orientation{Orientation::Csr=>self.entries.sort_by_key(|(r,c,_)|(*r,*c)),Orientation::Csc=>self.entries.sort_by_key(|(r,c,_)|(*c,*r))}
+-        let mut merged:Vec<(usize,usize,S)>=vec![];for(r,c,v)in self.entries{if let Some(last)=merged.last_mut(){if last.0==r&&last.1==c{last.2+=v;continue}}merged.push((r,c,v))}
+-        let major=match orientation{Orientation::Csr=>self.nrows,Orientation::Csc=>self.ncols};let mut offsets=vec![0u32;major+1];let mut indices=Vec::with_capacity(merged.len());let mut values=Vec::with_capacity(merged.len());let mut cursor=0usize;
+-        for m in 0..major{offsets[m]=cursor as u32;while cursor<merged.len(){let(r,c,v)=merged[cursor];let current=match orientation{Orientation::Csr=>r,Orientation::Csc=>c};if current!=m{break}indices.push(match orientation{Orientation::Csr=>c as u32,Orientation::Csc=>r as u32});values.push(v);cursor+=1;}}offsets[major]=cursor as u32;
+-        SparseMatrix{pattern:Arc::new(SparsePattern{nrows:self.nrows,ncols:self.ncols,orientation,offsets,indices,order:SortOrder::Canonical}),values}
++#[derive(Clone, Debug)]
++pub struct CooMatrix<S> {
++    nrows: usize,
++    ncols: usize,
++    entries: Vec<(usize, usize, S)>,
++}
++impl<S: Scalar> CooMatrix<S> {
++    pub fn new(nrows: usize, ncols: usize) -> Self {
++        Self {
++            nrows,
++            ncols,
++            entries: vec![],
++        }
+     }
++    pub fn with_capacity(nrows: usize, ncols: usize, capacity: usize) -> Self {
++        Self {
++            nrows,
++            ncols,
++            entries: Vec::with_capacity(capacity),
++        }
++    }
++    pub fn push(&mut self, row: usize, col: usize, value: S) {
++        self.entries.push((row, col, value))
++    }
++    pub fn finish_csr(self) -> SparseMatrix<S> {
++        self.compress(Orientation::Csr)
++    }
++    pub fn finish_csc(self) -> SparseMatrix<S> {
++        self.compress(Orientation::Csc)
++    }
++    fn compress(mut self, orientation: Orientation) -> SparseMatrix<S> {
++        match orientation {
++            Orientation::Csr => self.entries.sort_by_key(|(r, c, _)| (*r, *c)),
++            Orientation::Csc => self.entries.sort_by_key(|(r, c, _)| (*c, *r)),
++        }
++        let mut merged: Vec<(usize, usize, S)> = vec![];
++        for (r, c, v) in self.entries {
++            if let Some(last) = merged.last_mut() {
++                if last.0 == r && last.1 == c {
++                    last.2 += v;
++                    continue;
++                }
++            }
++            merged.push((r, c, v))
++        }
++        let major = match orientation {
++            Orientation::Csr => self.nrows,
++            Orientation::Csc => self.ncols,
++        };
++        let mut offsets = vec![0u32; major + 1];
++        let mut indices = Vec::with_capacity(merged.len());
++        let mut values = Vec::with_capacity(merged.len());
++        let mut cursor = 0usize;
++        for m in 0..major {
++            offsets[m] = cursor as u32;
++            while cursor < merged.len() {
++                let (r, c, v) = merged[cursor];
++                let current = match orientation {
++                    Orientation::Csr => r,
++                    Orientation::Csc => c,
++                };
++                if current != m {
++                    break;
++                }
++                indices.push(match orientation {
++                    Orientation::Csr => c as u32,
++                    Orientation::Csc => r as u32,
++                });
++                values.push(v);
++                cursor += 1;
++            }
++        }
++        offsets[major] = cursor as u32;
++        SparseMatrix {
++            pattern: Arc::new(SparsePattern {
++                nrows: self.nrows,
++                ncols: self.ncols,
++                orientation,
++                offsets,
++                indices,
++                order: SortOrder::Canonical,
++            }),
++            values,
++        }
++    }
+ }
+ 
+-impl<S:Scalar,I:SparseIndex>SparseMatrix<S,I>{
+-    pub fn apply(&self,x:&[S],out:&mut[S])->Result<(),NumericError>{if x.len()!=self.ncols(){return Err(NumericError::DimensionMismatch{expected:self.ncols(),got:x.len()})}if out.len()!=self.nrows(){return Err(NumericError::DimensionMismatch{expected:self.nrows(),got:out.len()})}for v in out.iter_mut(){*v=S::zero()}match self.pattern.orientation{Orientation::Csr=>for r in 0..self.nrows(){for k in self.pattern.offsets[r].to_usize()..self.pattern.offsets[r+1].to_usize(){out[r]+=self.values[k]*x[self.pattern.indices[k].to_usize()]}},Orientation::Csc=>for c in 0..self.ncols(){for k in self.pattern.offsets[c].to_usize()..self.pattern.offsets[c+1].to_usize(){out[self.pattern.indices[k].to_usize()]+=self.values[k]*x[c]}}}Ok(())}
++impl<S: Scalar, I: SparseIndex> SparseMatrix<S, I> {
++    pub fn apply(&self, x: &[S], out: &mut [S]) -> Result<(), NumericError> {
++        if x.len() != self.ncols() {
++            return Err(NumericError::DimensionMismatch {
++                expected: self.ncols(),
++                got: x.len(),
++            });
++        }
++        if out.len() != self.nrows() {
++            return Err(NumericError::DimensionMismatch {
++                expected: self.nrows(),
++                got: out.len(),
++            });
++        }
++        for v in out.iter_mut() {
++            *v = S::zero()
++        }
++        match self.pattern.orientation {
++            Orientation::Csr => {
++                for r in 0..self.nrows() {
++                    for k in
++                        self.pattern.offsets[r].to_usize()..self.pattern.offsets[r + 1].to_usize()
++                    {
++                        out[r] += self.values[k] * x[self.pattern.indices[k].to_usize()]
++                    }
++                }
++            }
++            Orientation::Csc => {
++                for c in 0..self.ncols() {
++                    for k in
++                        self.pattern.offsets[c].to_usize()..self.pattern.offsets[c + 1].to_usize()
++                    {
++                        out[self.pattern.indices[k].to_usize()] += self.values[k] * x[c]
++                    }
++                }
++            }
++        }
++        Ok(())
++    }
+ }
+ 
+-pub trait Jacobian<S:Scalar>:Send+Sync{
+-    fn n(&self)->usize;
+-    fn residual(&self,ctx:&Ctx,x:&[S],out:&mut[S])->Result<(),NumericError>;
+-    fn jvp(&self,ctx:&Ctx,x:&[S],v:&[S],out:&mut[S])->Result<(),NumericError>{let mut matrix=dense_zero::<S>(self.n());self.assemble_into(ctx,x,&mut matrix)?;matrix.apply(v,out)}
+-    fn assemble_into(&self,ctx:&Ctx,x:&[S],out:&mut SparseMatrix<S>)->Result<(),NumericError>;
++pub trait Jacobian<S: Scalar>: Send + Sync {
++    fn n(&self) -> usize;
++    fn residual(&self, ctx: &Ctx, x: &[S], out: &mut [S]) -> Result<(), NumericError>;
++    fn jvp(&self, ctx: &Ctx, x: &[S], v: &[S], out: &mut [S]) -> Result<(), NumericError> {
++        let mut matrix = dense_zero::<S>(self.n());
++        self.assemble_into(ctx, x, &mut matrix)?;
++        matrix.apply(v, out)
++    }
++    fn assemble_into(
++        &self,
++        ctx: &Ctx,
++        x: &[S],
++        out: &mut SparseMatrix<S>,
++    ) -> Result<(), NumericError>;
+ }
+ 
+-pub fn dense_zero<S:Scalar>(n:usize)->SparseMatrix<S>{let mut coo=CooMatrix::new(n,n);for i in 0..n{for j in 0..n{coo.push(i,j,S::zero())}}coo.finish_csr()}
++pub fn dense_zero<S: Scalar>(n: usize) -> SparseMatrix<S> {
++    let mut coo = CooMatrix::new(n, n);
++    for i in 0..n {
++        for j in 0..n {
++            coo.push(i, j, S::zero())
++        }
++    }
++    coo.finish_csr()
++}
+ 
+-#[derive(Clone,Copy,Debug,PartialEq)]pub struct IntegratorCoeffs<S>{pub mass:S,pub damp:S,pub stiff:S}
+-impl<S:Scalar>IntegratorCoeffs<S>{pub fn bdf(c:S)->Self{Self{mass:c,damp:S::zero(),stiff:S::one()}}pub fn generalized_alpha(m:S,d:S,k:S)->Self{Self{mass:m,damp:d,stiff:k}}}
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct IntegratorCoeffs<S> {
++    pub mass: S,
++    pub damp: S,
++    pub stiff: S,
++}
++impl<S: Scalar> IntegratorCoeffs<S> {
++    pub fn bdf(c: S) -> Self {
++        Self {
++            mass: c,
++            damp: S::zero(),
++            stiff: S::one(),
++        }
++    }
++    pub fn generalized_alpha(m: S, d: S, k: S) -> Self {
++        Self {
++            mass: m,
++            damp: d,
++            stiff: k,
++        }
++    }
++}
+ 
+-#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash,Serialize,Deserialize)]#[non_exhaustive]
+-pub enum DaeIndex{Ode,Index1,Index2,Index3,HigherReduced}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
++#[non_exhaustive]
++pub enum DaeIndex {
++    Ode,
++    Index1,
++    Index2,
++    Index3,
++    HigherReduced,
++}
+ 
+-pub trait DaeResidual<S:Scalar>:Jacobian<S>{
+-    fn residual_at(&self,ctx:&Ctx,t:f64,x:&[S],out:&mut[S])->Result<(),NumericError>;
+-    fn charge(&self,ctx:&Ctx,t:f64,x:&[S],out:&mut[S])->Result<(),NumericError>;
+-    fn mass_apply(&self,ctx:&Ctx,t:f64,x:&[S],v:&[S],out:&mut[S])->Result<(),NumericError>;
+-    fn iteration_matrix(&self,ctx:&Ctx,t:f64,x:&[S],coeffs:&IntegratorCoeffs<S>,out:&mut SparseMatrix<S>)->Result<(),NumericError>{let _=(ctx,t,x,coeffs,out);Err(NumericError::Unsupported{what:"assembled DAE iteration matrix".into()})}
+-    fn dae_index_hint(&self)->DaeIndex;
++pub trait DaeResidual<S: Scalar>: Jacobian<S> {
++    fn residual_at(&self, ctx: &Ctx, t: f64, x: &[S], out: &mut [S]) -> Result<(), NumericError>;
++    fn charge(&self, ctx: &Ctx, t: f64, x: &[S], out: &mut [S]) -> Result<(), NumericError>;
++    fn mass_apply(
++        &self,
++        ctx: &Ctx,
++        t: f64,
++        x: &[S],
++        v: &[S],
++        out: &mut [S],
++    ) -> Result<(), NumericError>;
++    fn iteration_matrix(
++        &self,
++        ctx: &Ctx,
++        t: f64,
++        x: &[S],
++        coeffs: &IntegratorCoeffs<S>,
++        out: &mut SparseMatrix<S>,
++    ) -> Result<(), NumericError> {
++        let _ = (ctx, t, x, coeffs, out);
++        Err(NumericError::Unsupported {
++            what: "assembled DAE iteration matrix".into(),
++        })
++    }
++    fn dae_index_hint(&self) -> DaeIndex;
+ }
+ 
+-impl fmt::Display for DaeIndex{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{write!(f,"{:?}",self)}}
++impl fmt::Display for DaeIndex {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "{:?}", self)
++    }
++}
+ 
+-#[cfg(test)]mod tests{use super::*;#[test]fn coo_is_deterministic_and_sums_duplicates(){let mut c=CooMatrix::<f64>::new(2,2);c.push(1,0,2.);c.push(0,1,3.);c.push(1,0,4.);let m=c.finish_csr();assert_eq!(m.values,vec![3.,6.]);assert_eq!(m.pattern.offsets,vec![0,1,2]);}#[test]fn dense_contract_applies(){let m=dense_zero::<f64>(2);let mut y=vec![1.;2];m.apply(&[2.,3.],&mut y).unwrap();assert_eq!(y,vec![0.,0.]);}}
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn coo_is_deterministic_and_sums_duplicates() {
++        let mut c = CooMatrix::<f64>::new(2, 2);
++        c.push(1, 0, 2.);
++        c.push(0, 1, 3.);
++        c.push(1, 0, 4.);
++        let m = c.finish_csr();
++        assert_eq!(m.values, vec![3., 6.]);
++        assert_eq!(m.pattern.offsets, vec![0, 1, 2]);
++    }
++    #[test]
++    fn dense_contract_applies() {
++        let m = dense_zero::<f64>(2);
++        let mut y = vec![1.; 2];
++        m.apply(&[2., 3.], &mut y).unwrap();
++        assert_eq!(y, vec![0., 0.]);
++    }
++}
+ 
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/constraint/symbolic.rs:103:
+         fn constant_f64_exact(&mut self, value: f64) -> Option<SymbolicNode> {
+             value.is_finite().then(|| self.node())
+         }
+-        fn add(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode { self.node() }
+-        fn sub(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode { self.node() }
+-        fn mul(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode { self.node() }
+-        fn div(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode { self.node() }
+-        fn pow_i(&mut self, _: SymbolicNode, _: i32) -> SymbolicNode { self.node() }
+-        fn apply(&mut self, _: &str, _: &[SymbolicNode]) -> SymbolicNode { self.node() }
++        fn add(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode {
++            self.node()
++        }
++        fn sub(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode {
++            self.node()
++        }
++        fn mul(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode {
++            self.node()
++        }
++        fn div(&mut self, _: SymbolicNode, _: SymbolicNode) -> SymbolicNode {
++            self.node()
++        }
++        fn pow_i(&mut self, _: SymbolicNode, _: i32) -> SymbolicNode {
++            self.node()
++        }
++        fn apply(&mut self, _: &str, _: &[SymbolicNode]) -> SymbolicNode {
++            self.node()
++        }
+     }
+ 
+     #[test]
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/mod.rs:285:
+                     opts.newton_rtol,
+                 ),
+                 Method::GeneralizedAlpha { rho_inf } => gen_alpha_step(
+-                    dae, ctx, t_prev, h_try, rho_inf, &x_prev, &xdot_prev, &x_pred, &newton_cfg,
++                    dae,
++                    ctx,
++                    t_prev,
++                    h_try,
++                    rho_inf,
++                    &x_prev,
++                    &xdot_prev,
++                    &x_pred,
++                    &newton_cfg,
+                     opts.newton_rtol,
+                 ),
+             };
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/mod.rs:425:
+     Ok(q)
+ }
+ 
+-fn failed(
+-    times: Vec<f64>,
+-    states: Vec<Vec<f64>>,
+-    error: IntegrateError,
+-) -> Trajectory {
++fn failed(times: Vec<f64>, states: Vec<Vec<f64>>, error: IntegrateError) -> Trajectory {
+     Trajectory {
+         times,
+         states,
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/step.rs:69:
+ enum Stage {
+     /// A BDF stage: `G(x) = a0·q(t_np1,x) + hist + g(t_np1,x)`, iteration matrix
+     /// `bdf(a0)`. `hist = Σ_{j≥1} a_j q^{n+1−j}` is precomputed (constant in `x`).
+-    Bdf {
+-        t_np1: f64,
+-        a0: f64,
+-        hist: Vec<f64>,
+-    },
++    Bdf { t_np1: f64, a0: f64, hist: Vec<f64> },
+     /// A generalized-α stage evaluated at the intermediate `(t_αf, x_αf)`, applying
+     /// the mass action to `ẋ_αm`. Iteration matrix `generalized_alpha(c_a, 0, c_d)`.
+     GenAlpha {
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/step.rs:163:
+             } => {
+                 let inv = 1.0 / (gamma * h);
+                 let c1 = (1.0 - gamma) / gamma;
+-                let xdot_np1: Vec<f64> =
+-                    (0..n).map(|i| inv * (x[i] - x_n[i]) - c1 * xdot_n[i]).collect();
++                let xdot_np1: Vec<f64> = (0..n)
++                    .map(|i| inv * (x[i] - x_n[i]) - c1 * xdot_n[i])
++                    .collect();
+                 let x_af: Vec<f64> = (0..n).map(|i| x_n[i] + alpha_f * (x[i] - x_n[i])).collect();
+                 let xdot_am: Vec<f64> = (0..n)
+                     .map(|i| xdot_n[i] + alpha_m * (xdot_np1[i] - xdot_n[i]))
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/step.rs:178:
+                     return 0.0;
+                 }
+                 let mut g = vec![0.0; n];
+-                if self.dae.residual_at(self.ctx, *t_af, &x_af, &mut g).is_err() {
++                if self
++                    .dae
++                    .residual_at(self.ctx, *t_af, &x_af, &mut g)
++                    .is_err()
++                {
+                     return 0.0;
+                 }
+                 let acc = (0..n)
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/step.rs:236:
+                 // ẋ^{n+1} = (x − x_n)/(γ h) − ((1−γ)/γ) ẋ_n
+                 let inv = 1.0 / (gamma * h);
+                 let c1 = (1.0 - gamma) / gamma;
+-                let xdot_np1: Vec<f64> =
+-                    (0..n).map(|i| inv * (x[i] - x_n[i]) - c1 * xdot_n[i]).collect();
++                let xdot_np1: Vec<f64> = (0..n)
++                    .map(|i| inv * (x[i] - x_n[i]) - c1 * xdot_n[i])
++                    .collect();
+                 let x_af: Vec<f64> = (0..n).map(|i| x_n[i] + alpha_f * (x[i] - x_n[i])).collect();
+                 let xdot_am: Vec<f64> = (0..n)
+                     .map(|i| xdot_n[i] + alpha_m * (xdot_np1[i] - xdot_n[i]))
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/step.rs:244:
+                     .collect();
+                 let mut m = vec![0.0; n];
+-                if let Err(e) = self.dae.mass_apply(self.ctx, *t_af, &x_af, &xdot_am, &mut m) {
++                if let Err(e) = self
++                    .dae
++                    .mass_apply(self.ctx, *t_af, &x_af, &xdot_am, &mut m)
++                {
+                     self.record_error(e);
+                     return vec![f64::NAN; n];
+                 }
+Diff in /home/runner/work/solverang/solverang/crates/solverang/src/integrate/step.rs:587:
+             residual_norm,
+             ..
+         } => Ok((Some(solution), residual_norm, iters)),
+-        SolveResult::NotConverged {
+-            residual_norm, ..
+-        } => Ok((None, residual_norm, iters)),
++        SolveResult::NotConverged { residual_norm, .. } => Ok((None, residual_norm, iters)),
+         SolveResult::Failed { .. } => Ok((None, f64::INFINITY, iters)),
+     }
+ }
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:12:
+ //! - typed, panic-free error reporting.
+ 
+ use numeric_contracts::{
+-    Ctx, CooMatrix, DaeIndex, DaeResidual, IntegratorCoeffs, Jacobian, NumericError, SparseMatrix,
++    CooMatrix, Ctx, DaeIndex, DaeResidual, IntegratorCoeffs, Jacobian, NumericError, SparseMatrix,
+ };
+ use solverang::integrate::{
+     integrate_dae, IntegrateError, IntegrateStatus, IntegratorOptions, Method,
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:52:
+ }
+ 
+ impl DaeResidual<f64> for ScalarDecay {
+-    fn residual_at(&self, _c: &Ctx, _t: f64, x: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
++    fn residual_at(
++        &self,
++        _c: &Ctx,
++        _t: f64,
++        x: &[f64],
++        out: &mut [f64],
++    ) -> Result<(), NumericError> {
+         out[0] = self.lambda * x[0];
+         Ok(())
+     }
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:119:
+ }
+ 
+ impl DaeResidual<f64> for StiffDiagonal {
+-    fn residual_at(&self, _c: &Ctx, _t: f64, x: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
++    fn residual_at(
++        &self,
++        _c: &Ctx,
++        _t: f64,
++        x: &[f64],
++        out: &mut [f64],
++    ) -> Result<(), NumericError> {
+         for (i, &l) in self.lambdas.iter().enumerate() {
+             out[i] = l * x[i];
+         }
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:192:
+ }
+ 
+ impl DaeResidual<f64> for Index1Dae {
+-    fn residual_at(&self, _c: &Ctx, _t: f64, x: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
++    fn residual_at(
++        &self,
++        _c: &Ctx,
++        _t: f64,
++        x: &[f64],
++        out: &mut [f64],
++    ) -> Result<(), NumericError> {
+         out[0] = x[0];
+         out[1] = x[1] - x[0];
+         Ok(())
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:296:
+     // No blow-up: every recorded state stays within the initial magnitude.
+     for st in &traj.states {
+         assert!(st.iter().all(|v| v.is_finite()), "non-finite state");
+-        assert!(st[0].abs() <= 1.0 + 1e-9 && st[1].abs() <= 1.0 + 1e-9, "state grew: {st:?}");
++        assert!(
++            st[0].abs() <= 1.0 + 1e-9 && st[1].abs() <= 1.0 + 1e-9,
++            "state grew: {st:?}"
++        );
+     }
+     let end = traj.last_state().unwrap();
+     // Slow mode ~ e^{-1}; implicit Euler order 1 at h=0.1 -> a few % off, but bounded.
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:303:
+-    assert!((end[0] - (-1.0_f64).exp()).abs() < 0.05, "slow mode off: {}", end[0]);
++    assert!(
++        (end[0] - (-1.0_f64).exp()).abs() < 0.05,
++        "slow mode off: {}",
++        end[0]
++    );
+     // Fast mode is annihilated (1/101^10 ≈ 1e-20).
+     assert!(end[1].abs() < 1e-6, "fast mode not damped: {}", end[1]);
+ }
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:331:
+ fn implicit_euler_is_first_order() {
+     // First order -> halving h halves the error (ratio ≈ 2).
+     let r = convergence_ratio(Method::ImplicitEuler, 1.0 / 50.0);
+-    assert!((1.7..2.4).contains(&r), "implicit-Euler order ratio {r} not ≈ 2");
++    assert!(
++        (1.7..2.4).contains(&r),
++        "implicit-Euler order ratio {r} not ≈ 2"
++    );
+ }
+ 
+ #[test]
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:368:
+ 
+     // Algebraic constraint x1 - x0 = 0 holds tightly at every accepted state.
+     for st in &traj.states {
+-        assert!((st[1] - st[0]).abs() < 1e-8, "algebraic row violated: {st:?}");
++        assert!(
++            (st[1] - st[0]).abs() < 1e-8,
++            "algebraic row violated: {st:?}"
++        );
+     }
+     let end = traj.last_state().unwrap();
+     let exact = (-1.0_f64).exp();
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:375:
+-    assert!((end[0] - exact).abs() < 0.02, "x0 off: {} vs {exact}", end[0]);
+-    assert!((end[1] - exact).abs() < 0.02, "x1 off: {} vs {exact}", end[1]);
++    assert!(
++        (end[0] - exact).abs() < 0.02,
++        "x0 off: {} vs {exact}",
++        end[0]
++    );
++    assert!(
++        (end[1] - exact).abs() < 0.02,
++        "x1 off: {} vs {exact}",
++        end[1]
++    );
+ }
+ 
+ #[test]
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:381:
+     let prob = Index1Dae;
+     let opts = IntegratorOptions::adaptive(Method::Bdf2, 1e-3).with_tolerances(1e-8, 1e-10);
+     let traj = integrate_dae(&prob, &ctx(), (0.0, 1.0), &[1.0, 1.0], &opts);
+-    assert!(traj.is_completed(), "index-1 BDF2 failed: {:?}", traj.status);
++    assert!(
++        traj.is_completed(),
++        "index-1 BDF2 failed: {:?}",
++        traj.status
++    );
+     let end = traj.last_state().unwrap();
+     let exact = (-1.0_f64).exp();
+     assert!((end[0] - exact).abs() < 1e-5, "x0 off: {}", end[0]);
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:397:
+     let opts = IntegratorOptions::adaptive(Method::ImplicitEuler, 0.8).with_tolerances(1e-6, 1e-9);
+     let traj = integrate_dae(&prob, &ctx(), (0.0, 2.0), &[1.0], &opts);
+ 
+-    assert!(traj.is_completed(), "adaptive run failed: {:?}", traj.status);
+     assert!(
++        traj.is_completed(),
++        "adaptive run failed: {:?}",
++        traj.status
++    );
++    assert!(
+         traj.stats.rejected_steps >= 1,
+         "expected at least one rejected step, got {}",
+         traj.stats.rejected_steps
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/dae_integration.rs:430:
+         "adaptive used too many steps: {}",
+         traj.stats.accepted_steps
+     );
+-    assert!(traj.stats.accepted_steps * 4 < 50_000, "not meaningfully adaptive");
++    assert!(
++        traj.stats.accepted_steps * 4 < 50_000,
++        "not meaningfully adaptive"
++    );
+ }
+ 
+ #[test]
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/differential_oracle.rs:141:
+         conflicts,
+         rank_deficiency,
+     };
+-    eprintln!("  solverang verdict: {v:?} (solve status {:?})", result.status);
++    eprintln!(
++        "  solverang verdict: {v:?} (solve status {:?})",
++        result.status
++    );
+     if v.solve_solved && !v.consistent() {
+         // The S5 divergence surfacing in the lane: solve() accepted a system the
+         // classification (conflict + residual) marks inconsistent.
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/differential_oracle.rs:171:
+     let v = verdict(b.build(), Some(p1.entity_id()));
+ 
+     assert!(v.consistent(), "S1 must be consistent (D-Cubed: SUCCEEDED)");
+-    assert!(v.well_defined(), "S1 must be well-defined, 0 DOF (D-Cubed: dof_count=0); got total_dof={}", v.total_dof);
+-    assert_eq!(v.entity_dof, Some(0), "S1 p1 per-entity DOF (D-Cubed underdefined_dof=0)");
++    assert!(
++        v.well_defined(),
++        "S1 must be well-defined, 0 DOF (D-Cubed: dof_count=0); got total_dof={}",
++        v.total_dof
++    );
++    assert_eq!(
++        v.entity_dof,
++        Some(0),
++        "S1 p1 per-entity DOF (D-Cubed underdefined_dof=0)"
++    );
+     assert!(!v.over_constrained(), "S1 has no redundancy");
+     assert_eq!(v.conflicts, 0);
+ }
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/differential_oracle.rs:198:
+     let v = verdict(b.build(), Some(p1.entity_id()));
+ 
+     assert!(v.consistent(), "S2 must be consistent (D-Cubed: SUCCEEDED)");
+-    assert!(v.under_defined(), "S2 must be under-defined (D-Cubed: POSITION_UNDERDEFINED); got total_dof={}", v.total_dof);
+-    assert_eq!(v.total_dof, 1, "S2 residual DOF = 1 rotation (D-Cubed dof_count=1)");
+-    assert_eq!(v.entity_dof, Some(1), "S2 p1 per-entity DOF (D-Cubed underdefined_dof=1)");
++    assert!(
++        v.under_defined(),
++        "S2 must be under-defined (D-Cubed: POSITION_UNDERDEFINED); got total_dof={}",
++        v.total_dof
++    );
++    assert_eq!(
++        v.total_dof, 1,
++        "S2 residual DOF = 1 rotation (D-Cubed dof_count=1)"
++    );
++    assert_eq!(
++        v.entity_dof,
++        Some(1),
++        "S2 p1 per-entity DOF (D-Cubed underdefined_dof=1)"
++    );
+     assert!(!v.over_constrained(), "S2 has no redundancy");
+ }
+ 
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/differential_oracle.rs:229:
+     let v = verdict(b.build(), Some(p2.entity_id()));
+ 
+     assert!(v.consistent(), "S3 must be consistent (D-Cubed: SUCCEEDED)");
+-    assert!(v.well_defined(), "S3 must be well-defined, 0 DOF (D-Cubed: dof_count=0); got total_dof={}", v.total_dof);
+-    assert_eq!(v.entity_dof, Some(0), "S3 p2 per-entity DOF (D-Cubed underdefined_dof=0)");
++    assert!(
++        v.well_defined(),
++        "S3 must be well-defined, 0 DOF (D-Cubed: dof_count=0); got total_dof={}",
++        v.total_dof
++    );
++    assert_eq!(
++        v.entity_dof,
++        Some(0),
++        "S3 p2 per-entity DOF (D-Cubed underdefined_dof=0)"
++    );
+     assert!(!v.over_constrained(), "S3 has no redundancy");
+ }
+ 
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/differential_oracle.rs:258:
+ 
+     let v = verdict(b.build(), Some(p1.entity_id()));
+ 
+-    assert!(v.consistent(), "S4 must stay consistent — redundancy is not conflict (D-Cubed: SUCCEEDED)");
+-    assert!(v.over_constrained(), "S4 must show rank deficiency (D-Cubed: dof_result=UNKNOWN); rank_deficiency={}", v.rank_deficiency);
+-    assert!(v.redundant >= 1, "S4 must flag >=1 redundant constraint; got {}", v.redundant);
++    assert!(
++        v.consistent(),
++        "S4 must stay consistent — redundancy is not conflict (D-Cubed: SUCCEEDED)"
++    );
++    assert!(
++        v.over_constrained(),
++        "S4 must show rank deficiency (D-Cubed: dof_result=UNKNOWN); rank_deficiency={}",
++        v.rank_deficiency
++    );
++    assert!(
++        v.redundant >= 1,
++        "S4 must flag >=1 redundant constraint; got {}",
++        v.redundant
++    );
+     assert_eq!(v.conflicts, 0, "S4 is redundant, not conflicting");
+ }
+ 
+Diff in /home/runner/work/solverang/solverang/crates/solverang/tests/differential_oracle.rs:284:
+ 
+     let v = verdict(b.build(), Some(p1.entity_id()));
+ 
+-    assert!(!v.consistent(), "S5 must be inconsistent (D-Cubed: NOT_SATISFIED)");
+-    assert!(v.conflicts >= 1, "S5 must flag a conflicting constraint group; got {}", v.conflicts);
+-    assert!(v.over_constrained(), "S5 must show rank deficiency (D-Cubed: dof_result=UNKNOWN)");
++    assert!(
++        !v.consistent(),
++        "S5 must be inconsistent (D-Cubed: NOT_SATISFIED)"
++    );
++    assert!(
++        v.conflicts >= 1,
++        "S5 must flag a conflicting constraint group; got {}",
++        v.conflicts
++    );
++    assert!(
++        v.over_constrained(),
++        "S5 must show rank deficiency (D-Cubed: dof_result=UNKNOWN)"
++    );
+     // The residual left after solving is large (~1.5): the two radii cannot both
+     // be met. This is what makes `consistent()` false.
+-    assert!(v.max_residual > 1.0, "S5 solved state must still violate a constraint; max_residual={}", v.max_residual);
++    assert!(
++        v.max_residual > 1.0,
++        "S5 solved state must still violate a constraint; max_residual={}",
++        v.max_residual
++    );
+ }
+ 
+ // ---------------------------------------------------------------------------
+fmt_status=1
