@@ -1,6 +1,6 @@
 use solverang_contracts::{Ctx, NumericError};
 use solverang_scientific::{
-    BlockLayout, BlockResidual, BlockSpec, CoupledSolveConfig, CoupledStrategy, solve_coupled,
+    solve_coupled, BlockLayout, BlockResidual, BlockSpec, CoupledSolveConfig, CoupledStrategy,
 };
 
 struct LinearCoupled {
@@ -11,15 +11,28 @@ impl LinearCoupled {
     fn new(coupling: f64) -> Self {
         Self {
             layout: BlockLayout::new(vec![
-                BlockSpec { name: "left".into(), offset: 0, len: 1, scale: 1.0 },
-                BlockSpec { name: "right".into(), offset: 1, len: 1, scale: 1.0 },
-            ]).unwrap(),
+                BlockSpec {
+                    name: "left".into(),
+                    offset: 0,
+                    len: 1,
+                    scale: 1.0,
+                },
+                BlockSpec {
+                    name: "right".into(),
+                    offset: 1,
+                    len: 1,
+                    scale: 1.0,
+                },
+            ])
+            .unwrap(),
             coupling,
         }
     }
 }
 impl BlockResidual for LinearCoupled {
-    fn layout(&self) -> &BlockLayout { &self.layout }
+    fn layout(&self) -> &BlockLayout {
+        &self.layout
+    }
     fn residual(&self, _ctx: &Ctx, x: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
         out[0] = x[0] + self.coupling * x[1] - 1.0;
         out[1] = self.coupling * x[0] + x[1];
@@ -46,8 +59,20 @@ fn config(strategy: CoupledStrategy, max_iterations: usize) -> CoupledSolveConfi
 fn monolithic_and_block_newton_reach_the_same_reference_solution() {
     let ctx = Ctx::reproducible();
     let problem = LinearCoupled::new(0.7);
-    let mono = solve_coupled(&problem, &ctx, &[0.0, 0.0], &config(CoupledStrategy::MonolithicNewton, 8)).unwrap();
-    let block = solve_coupled(&problem, &ctx, &[0.0, 0.0], &config(CoupledStrategy::BlockNewton, 8)).unwrap();
+    let mono = solve_coupled(
+        &problem,
+        &ctx,
+        &[0.0, 0.0],
+        &config(CoupledStrategy::MonolithicNewton, 8),
+    )
+    .unwrap();
+    let block = solve_coupled(
+        &problem,
+        &ctx,
+        &[0.0, 0.0],
+        &config(CoupledStrategy::BlockNewton, 8),
+    )
+    .unwrap();
     assert!(mono.converged && block.converged);
     for (a, b) in mono.solution.iter().zip(&block.solution) {
         assert!((a - b).abs() < 1.0e-11);
@@ -63,9 +88,24 @@ fn monolithic_and_block_newton_reach_the_same_reference_solution() {
 fn strong_coupling_exposes_staggered_failure_while_monolithic_converges() {
     let ctx = Ctx::reproducible();
     let problem = LinearCoupled::new(0.99);
-    let mono = solve_coupled(&problem, &ctx, &[0.0, 0.0], &config(CoupledStrategy::MonolithicNewton, 4)).unwrap();
-    let staggered = solve_coupled(&problem, &ctx, &[0.0, 0.0], &config(CoupledStrategy::GaussSeidel, 5)).unwrap();
+    let mono = solve_coupled(
+        &problem,
+        &ctx,
+        &[0.0, 0.0],
+        &config(CoupledStrategy::MonolithicNewton, 4),
+    )
+    .unwrap();
+    let staggered = solve_coupled(
+        &problem,
+        &ctx,
+        &[0.0, 0.0],
+        &config(CoupledStrategy::GaussSeidel, 5),
+    )
+    .unwrap();
     assert!(mono.converged);
-    assert!(!staggered.converged, "strongly coupled staggered solve unexpectedly converged in five iterations");
+    assert!(
+        !staggered.converged,
+        "strongly coupled staggered solve unexpectedly converged in five iterations"
+    );
     assert!(mono.trace.len() < staggered.trace.len());
 }
