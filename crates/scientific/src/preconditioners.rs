@@ -121,11 +121,11 @@ impl BlockPreconditioner for BlockLowerTriangularPreconditioner {
                 .filter(|b| b.row_block == row_block)
             {
                 let col = &self.layout.blocks[block.col_block];
-                for i in 0..row.len {
+                for (i, local_i) in local.iter_mut().enumerate().take(row.len) {
                     let correction = (0..col.len)
                         .map(|j| block.values[i * col.len + j] * out[col.offset + j])
                         .sum::<f64>();
-                    local[i] -= correction;
+                    *local_i -= correction;
                 }
             }
             for i in 0..row.len {
