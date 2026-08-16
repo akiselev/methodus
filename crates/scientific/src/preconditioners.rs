@@ -128,8 +128,8 @@ impl BlockPreconditioner for BlockLowerTriangularPreconditioner {
                     *local_i -= correction;
                 }
             }
-            for i in 0..row.len {
-                out[row.offset + i] = local[i] * self.inverse_diagonal[row.offset + i];
+            for (i, value) in local.into_iter().enumerate() {
+                out[row.offset + i] = value * self.inverse_diagonal[row.offset + i];
             }
         }
         Ok(())
