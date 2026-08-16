@@ -27,9 +27,9 @@ nalgebra = "0.34"
 levenberg-marquardt = "0.15"
 thiserror = "2.0"
 
-# Portable solver-facing numerical contracts. The DAE seam now lives with Solverang instead
-# of reaching into a developer-local Sinbad checkout.
-solverang-contracts = { path = "../contracts" }
+# Portable solver-facing numerical contracts. Keep the historical crate import name during
+# the federation migration, while the package itself is now owned and published by Solverang.
+numeric-contracts = { package = "solverang-contracts", path = "../contracts" }
 
 rayon = { version = "1.10", optional = true }
 faer = { version = "0.22", optional = true }
