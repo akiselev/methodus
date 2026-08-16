@@ -183,8 +183,8 @@ impl<S: Scalar> CooMatrix<S> {
         let mut indices = Vec::with_capacity(merged.len());
         let mut values = Vec::with_capacity(merged.len());
         let mut cursor = 0usize;
-        for m in 0..major {
-            offsets[m] = cursor as u32;
+        for (m, offset) in offsets.iter_mut().enumerate().take(major) {
+            *offset = cursor as u32;
             while cursor < merged.len() {
                 let (r, c, v) = merged[cursor];
                 let current = match orientation {
@@ -236,20 +236,20 @@ impl<S: Scalar, I: SparseIndex> SparseMatrix<S, I> {
         }
         match self.pattern.orientation {
             Orientation::Csr => {
-                for r in 0..self.nrows() {
+                for (r, out_r) in out.iter_mut().enumerate().take(self.nrows()) {
                     for k in
                         self.pattern.offsets[r].to_usize()..self.pattern.offsets[r + 1].to_usize()
                     {
-                        out[r] += self.values[k] * x[self.pattern.indices[k].to_usize()]
+                        *out_r += self.values[k] * x[self.pattern.indices[k].to_usize()]
                     }
                 }
             }
             Orientation::Csc => {
-                for c in 0..self.ncols() {
+                for (c, x_c) in x.iter().copied().enumerate().take(self.ncols()) {
                     for k in
                         self.pattern.offsets[c].to_usize()..self.pattern.offsets[c + 1].to_usize()
                     {
-                        out[self.pattern.indices[k].to_usize()] += self.values[k] * x[c]
+                        out[self.pattern.indices[k].to_usize()] += self.values[k] * x_c
                     }
                 }
             }
