@@ -23,26 +23,22 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('crates/scientific/src/lib.rs')
           s = p.read_text()
-          old = 'Ok(StepOutcome::Accepted(AcceptedStep { state: next, used_order: order, error_estimate: error, suggested_dt: (dt * factor).min(config.max_dt) }))'
-          new = 'Ok(StepOutcome::Accepted(AcceptedStep { state: next, used_order: order, error_estimate: error, suggested_dt: (dt * factor).min(config.max_dt), events }))'
-          assert old in s
-          s = s.replace(old, new)
-          old = '''            CoupledStrategy::BlockNewton | CoupledStrategy::GaussSeidel => {
-                // A block lower-triangular nonlinear sweep. Re-linearize after every block so
-                // dependencies updated by earlier blocks are immediately visible.
-                let mut total = vec![0.0; n];
-                for b in 0..problem.layout().blocks.len() {
-                    problem.residual(ctx, &x, &mut r)?;
-                    let range = problem.layout().range(b);
-                    let local = newton_step(problem, ctx, &x, &r, range.clone())?;
-                    for i in range { x[i] += local[i]; total[i] += local[i]; }
-                }
-                if config.strategy == CoupledStrategy::GaussSeidel { records.push(IterationRecord { iteration, residual_norm: old_norm, damping: 1.0 }); continue; }
-                total
-            }'''
-          new = '''            CoupledStrategy::BlockNewton | CoupledStrategy::GaussSeidel => {
+          s, n = re.subn(
+              r'Ok\(StepOutcome::Accepted\(AcceptedStep \{ state: next, used_order: order, error_estimate: error, suggested_dt: \(dt \* factor\)\.min\(config\.max_dt\) \}\)\)',
+              'Ok(StepOutcome::Accepted(AcceptedStep { state: next, used_order: order, error_estimate: error, suggested_dt: (dt * factor).min(config.max_dt), events }))',
+              s,
+          )
+          if n != 1:
+              raise SystemExit(f'expected one AcceptedStep replacement, got {n}')
+
+          pattern = re.compile(
+              r'(?s)            CoupledStrategy::BlockNewton \| CoupledStrategy::GaussSeidel => \{.*?\n            \}\n            CoupledStrategy::Jacobi => \{'
+          )
+          replacement = '''            CoupledStrategy::BlockNewton | CoupledStrategy::GaussSeidel => {
                 // Lower-triangular nonlinear sweep on a private work vector. Re-linearize after
                 // every block, then expose the aggregate update to the common damping path.
                 let original = x.clone();
@@ -61,9 +57,12 @@ jobs:
                     continue;
                 }
                 total
-            }'''
-          assert old in s
-          p.write_text(s.replace(old, new))
+            }
+            CoupledStrategy::Jacobi => {'''
+          s, n = pattern.subn(replacement, s)
+          if n != 1:
+              raise SystemExit(f'expected one block strategy replacement, got {n}')
+          p.write_text(s)
           PY
           cargo fmt --all
       - name: Commit fixes
