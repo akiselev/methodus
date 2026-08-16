@@ -8,5 +8,5 @@ description = "Portable numerical operator and DAE contracts for Solverang"
 repository = "https://github.com/akiselev/solverang"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 thiserror = "2"
