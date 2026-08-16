@@ -1,0 +1,27 @@
+name: wave-doc-diagnostic
+
+on:
+  push:
+    branches: [agent/r13-r20-wave-a-f]
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Capture rustdoc output
+        shell: bash
+        run: |
+          set +e
+          RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps > rustdoc.log 2>&1
+          code=$?
+          cat rustdoc.log
+          echo "$code" > rustdoc.exit
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustdoc-diagnostic
+          path: |
+            rustdoc.log
+            rustdoc.exit
