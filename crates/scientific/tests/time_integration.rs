@@ -1,7 +1,5 @@
 use solverang_contracts::{Ctx, NumericError};
-use solverang_scientific::{
-    BdfConfig, BdfOrder, BdfState, DaeOperator, StepOutcome, bdf_step,
-};
+use solverang_scientific::{bdf_step, BdfConfig, BdfOrder, BdfState, DaeOperator, StepOutcome};
 
 struct Decay;
 impl DaeOperator for Decay {
@@ -102,5 +100,8 @@ fn rejected_step_returns_bit_identical_committed_state() {
     let StepOutcome::Rejected(rejected) = outcome else {
         panic!("expected strict tolerance to reject the BDF2 attempt");
     };
-    assert_eq!(serde_json::to_vec(&rejected.unchanged_state).unwrap(), before);
+    assert_eq!(
+        serde_json::to_vec(&rejected.unchanged_state).unwrap(),
+        before
+    );
 }
