@@ -1,0 +1,71 @@
+name: fix-contracts-clippy
+on:
+  push:
+    branches:
+      - agent/r13-r20-wave-a-f
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r13-r20-wave-a-f
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply iterator rewrites
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('crates/contracts/src/lib.rs')
+          s=p.read_text()
+          s=s.replace(
+          '''        for m in 0..major {
+            offsets[m] = cursor as u32;''',
+          '''        for (m, offset) in offsets.iter_mut().enumerate().take(major) {
+            *offset = cursor as u32;''',1)
+          s=s.replace(
+          '''                for r in 0..self.nrows() {
+                    for k in
+                        self.pattern.offsets[r].to_usize()..self.pattern.offsets[r + 1].to_usize()
+                    {
+                        out[r] += self.values[k] * x[self.pattern.indices[k].to_usize()]
+                    }
+                }''',
+          '''                for (r, out_r) in out.iter_mut().enumerate().take(self.nrows()) {
+                    for k in
+                        self.pattern.offsets[r].to_usize()..self.pattern.offsets[r + 1].to_usize()
+                    {
+                        *out_r += self.values[k] * x[self.pattern.indices[k].to_usize()]
+                    }
+                }''',1)
+          s=s.replace(
+          '''                for c in 0..self.ncols() {
+                    for k in
+                        self.pattern.offsets[c].to_usize()..self.pattern.offsets[c + 1].to_usize()
+                    {
+                        out[self.pattern.indices[k].to_usize()] += self.values[k] * x[c]
+                    }
+                }''',
+          '''                for (c, x_c) in x.iter().copied().enumerate().take(self.ncols()) {
+                    for k in
+                        self.pattern.offsets[c].to_usize()..self.pattern.offsets[c + 1].to_usize()
+                    {
+                        out[self.pattern.indices[k].to_usize()] += self.values[k] * x_c
+                    }
+                }''',1)
+          p.write_text(s)
+          PY
+          cargo fmt --all
+      - name: Commit source
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/contracts/src/lib.rs
+          git commit -m 'Satisfy current stable clippy in numeric contracts'
+          git push origin HEAD:agent/r13-r20-wave-a-f
