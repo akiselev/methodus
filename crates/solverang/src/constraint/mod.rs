@@ -15,9 +15,15 @@
 //!   point arrays. This allows constraints over any combination of parameters.
 //!
 //! - **No geometry types** — the solver never sees `Point2D`, `Circle`, etc.
+//!
+//! - **Symbolic export is an optional capability, not the primary interface.** A
+//!   constraint may emit the same residual equations through a dependency-neutral
+//!   [`SymbolicSink`](crate::symbolic::SymbolicSink). Existing constraints and consumers
+//!   remain purely numerical unless they opt into that path.
 
 use crate::id::{ConstraintId, EntityId, ParamId};
 use crate::param::ParamStore;
+use crate::symbolic::{SymbolicNode, SymbolicSink};
 
 /// A constraint: a set of equations over parameters.
 ///
@@ -31,6 +37,8 @@ use crate::param::ParamStore;
 /// - No `points: &[Point<D>]` parameter — constraints read from `ParamStore`.
 /// - No geometry types — the solver never sees `Point2D`, `Circle`, etc.
 /// - Jacobian returns `ParamId`, not column indices — the system does the mapping.
+/// - No mandatory CAS dependency — optional symbolic residuals are emitted into a caller
+///   supplied sink.
 pub trait Constraint: Send + Sync {
     /// Unique identifier for this constraint.
     fn id(&self) -> ConstraintId;
@@ -55,6 +63,19 @@ pub trait Constraint: Send + Sync {
     /// Only non-zero entries need to be returned. The system maps `ParamId` to
     /// column indices via [`crate::param::SolverMapping`].
     fn jacobian(&self, store: &ParamStore) -> Vec<(usize, ParamId, f64)>;
+
+    /// Emit the residual equations into a caller-owned symbolic representation.
+    ///
+    /// `None` means this constraint intentionally has no symbolic representation through
+    /// this protocol. It is **not** an error and does not disable any numerical solver.
+    /// The default preserves source compatibility for every existing constraint.
+    ///
+    /// A Resolvent adapter can implement [`SymbolicSink`] to obtain exact expression DAGs,
+    /// differentiate them, perform generic-rank analysis, or generate certificates without
+    /// Solverang depending on Resolvent itself.
+    fn symbolic_residuals(&self, _sink: &mut dyn SymbolicSink) -> Option<Vec<SymbolicNode>> {
+        None
+    }
 
     /// Weight for soft constraints (default 1.0).
     ///
