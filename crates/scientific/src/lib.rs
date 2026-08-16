@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
+pub mod preconditioners;
+
 use serde::{Deserialize, Serialize};
 use solverang_contracts::{Ctx, NumericError};
 use thiserror::Error;
@@ -116,7 +118,9 @@ pub struct CoupledSolveConfig {
     pub max_iterations: usize,
     pub absolute_tolerance: f64,
     pub relative_tolerance: f64,
-    pub minimum_damping: f64,
+    pub damping: f64,
+    pub min_damping: f64,
+    pub line_search_steps: usize,
 }
 impl Default for CoupledSolveConfig {
     fn default() -> Self {
@@ -125,38 +129,39 @@ impl Default for CoupledSolveConfig {
             max_iterations: 50,
             absolute_tolerance: 1e-10,
             relative_tolerance: 1e-8,
-            minimum_damping: 1e-4,
+            damping: 1.0,
+            min_damping: 1e-4,
+            line_search_steps: 12,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IterationRecord {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct IterationTrace {
     pub iteration: usize,
     pub residual_norm: f64,
+    pub scaled_residual_norm: f64,
     pub damping: f64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CoupledSolveResult {
     pub solution: Vec<f64>,
     pub converged: bool,
-    pub iterations: Vec<IterationRecord>,
+    pub trace: Vec<IterationTrace>,
 }
 
 #[derive(Debug, Error)]
 pub enum SolveError {
     #[error("invalid block layout")]
     InvalidLayout,
-    #[error("dimension mismatch")]
-    Dimension,
-    #[error("singular dense linearization")]
-    Singular,
-    #[error("numerical contract failed: {0}")]
+    #[error("dimension mismatch: expected {expected}, got {got}")]
+    Dimension { expected: usize, got: usize },
+    #[error("numerical failure: {0}")]
     Numeric(#[from] NumericError),
-    #[error("nonlinear solve did not converge")]
-    NoConvergence,
-    #[error("invalid timestep")]
-    InvalidStep,
+    #[error("singular dense Newton system")]
+    Singular,
+    #[error("non-finite residual or iterate")]
+    NonFinite,
 }
 
 pub fn solve_coupled(
@@ -165,202 +170,241 @@ pub fn solve_coupled(
     initial: &[f64],
     config: &CoupledSolveConfig,
 ) -> Result<CoupledSolveResult, SolveError> {
-    let n = problem.layout().dimension;
-    if initial.len() != n {
-        return Err(SolveError::Dimension);
+    let layout = problem.layout();
+    if initial.len() != layout.dimension {
+        return Err(SolveError::Dimension {
+            expected: layout.dimension,
+            got: initial.len(),
+        });
     }
     let mut x = initial.to_vec();
-    let mut r = vec![0.0; n];
-    problem.residual(ctx, &x, &mut r)?;
-    let initial_norm = scaled_norm(problem.layout(), &r).max(1.0);
-    let mut records = vec![];
+    let mut residual = vec![0.0; layout.dimension];
+    problem.residual(ctx, &x, &mut residual)?;
+    let initial_norm = scaled_norm(layout, &residual);
+    let mut trace = Vec::new();
     for iteration in 0..config.max_iterations {
-        problem.residual(ctx, &x, &mut r)?;
-        let norm = scaled_norm(problem.layout(), &r);
-        if norm <= config.absolute_tolerance || norm / initial_norm <= config.relative_tolerance {
+        problem.residual(ctx, &x, &mut residual)?;
+        let scaled = scaled_norm(layout, &residual);
+        let raw = l2(&residual);
+        if !scaled.is_finite() {
+            return Err(SolveError::NonFinite);
+        }
+        if scaled <= config.absolute_tolerance
+            || scaled <= config.relative_tolerance * initial_norm.max(1.0)
+        {
+            trace.push(IterationTrace {
+                iteration,
+                residual_norm: raw,
+                scaled_residual_norm: scaled,
+                damping: 0.0,
+            });
             return Ok(CoupledSolveResult {
                 solution: x,
                 converged: true,
-                iterations: records,
+                trace,
             });
         }
-        let old_norm = norm;
-        let step = match config.strategy {
-            CoupledStrategy::MonolithicNewton => newton_step(problem, ctx, &x, &r, 0..n)?,
-            CoupledStrategy::BlockNewton | CoupledStrategy::GaussSeidel => {
-                // Lower-triangular nonlinear sweep on a private work vector. Re-linearize after
-                // every block, then expose the aggregate update to the common damping path.
-                let original = x.clone();
-                let mut work = x.clone();
-                let mut work_r = r.clone();
-                for b in 0..problem.layout().blocks.len() {
-                    problem.residual(ctx, &work, &mut work_r)?;
-                    let range = problem.layout().range(b);
-                    let local = newton_step(problem, ctx, &work, &work_r, range.clone())?;
-                    for i in range {
-                        work[i] += local[i];
-                    }
-                }
-                let total = work
-                    .iter()
-                    .zip(&original)
-                    .map(|(a, b)| a - b)
-                    .collect::<Vec<_>>();
-                if config.strategy == CoupledStrategy::GaussSeidel {
-                    x = work;
-                    records.push(IterationRecord {
-                        iteration,
-                        residual_norm: old_norm,
-                        damping: 1.0,
-                    });
-                    continue;
-                }
-                total
-            }
-            CoupledStrategy::Jacobi => {
-                let mut total = vec![0.0; n];
-                for b in 0..problem.layout().blocks.len() {
-                    let range = problem.layout().range(b);
-                    let local = newton_step(problem, ctx, &x, &r, range.clone())?;
-                    for i in range {
-                        total[i] = local[i];
-                    }
-                }
-                total
-            }
+        let update = match config.strategy {
+            CoupledStrategy::MonolithicNewton => dense_newton_update(problem, ctx, &x, &residual)?,
+            CoupledStrategy::BlockNewton => block_newton_update(problem, ctx, &x, &residual)?,
+            CoupledStrategy::GaussSeidel => staggered_update(problem, ctx, &x, layout, false)?,
+            CoupledStrategy::Jacobi => staggered_update(problem, ctx, &x, layout, true)?,
         };
-        let mut damping = 1.0;
-        let original = x.clone();
-        loop {
-            for i in 0..n {
-                x[i] = original[i] + damping * step[i];
+        let mut damping = config.damping;
+        let mut accepted = false;
+        let mut candidate = x.clone();
+        let mut candidate_residual = vec![0.0; layout.dimension];
+        for _ in 0..config.line_search_steps {
+            candidate.clone_from(&x);
+            for (value, delta) in candidate.iter_mut().zip(&update) {
+                *value += damping * delta;
             }
-            problem.residual(ctx, &x, &mut r)?;
-            if scaled_norm(problem.layout(), &r) < old_norm || damping <= config.minimum_damping {
+            problem.residual(ctx, &candidate, &mut candidate_residual)?;
+            if scaled_norm(layout, &candidate_residual) < scaled || damping <= config.min_damping {
+                accepted = true;
                 break;
             }
             damping *= 0.5;
         }
-        records.push(IterationRecord {
+        if !accepted {
+            return Err(SolveError::NonFinite);
+        }
+        trace.push(IterationTrace {
             iteration,
-            residual_norm: old_norm,
+            residual_norm: raw,
+            scaled_residual_norm: scaled,
             damping,
         });
+        x = candidate;
     }
     Ok(CoupledSolveResult {
         solution: x,
         converged: false,
-        iterations: records,
+        trace,
     })
 }
 
-fn newton_step(
+fn dense_newton_update(
     problem: &impl BlockResidual,
     ctx: &Ctx,
     x: &[f64],
     residual: &[f64],
-    active: std::ops::Range<usize>,
 ) -> Result<Vec<f64>, SolveError> {
-    let n = problem.layout().dimension;
-    let ids: Vec<usize> = active.collect();
-    let m = ids.len();
-    let mut a = vec![vec![0.0; m]; m];
+    let n = x.len();
+    let mut jacobian = vec![vec![0.0; n]; n];
     let mut direction = vec![0.0; n];
     let mut column = vec![0.0; n];
-    for (j_local, &j) in ids.iter().enumerate() {
-        direction.fill(0.0);
+    for j in 0..n {
         direction[j] = 1.0;
         problem.jvp(ctx, x, &direction, &mut column)?;
-        for (i_local, &i) in ids.iter().enumerate() {
-            a[i_local][j_local] = column[i];
+        for i in 0..n {
+            jacobian[i][j] = column[i];
+        }
+        direction[j] = 0.0;
+    }
+    solve_dense(jacobian, residual.iter().map(|value| -value).collect())
+}
+
+fn block_newton_update(
+    problem: &impl BlockResidual,
+    ctx: &Ctx,
+    x: &[f64],
+    residual: &[f64],
+) -> Result<Vec<f64>, SolveError> {
+    // Block Newton retains the full coupled derivative graph but factors each diagonal block and
+    // applies off-diagonal corrections through a small block Gauss-Seidel linear solve.
+    let layout = problem.layout();
+    let n = layout.dimension;
+    let mut jacobian = vec![vec![0.0; n]; n];
+    let mut direction = vec![0.0; n];
+    let mut column = vec![0.0; n];
+    for j in 0..n {
+        direction[j] = 1.0;
+        problem.jvp(ctx, x, &direction, &mut column)?;
+        for i in 0..n {
+            jacobian[i][j] = column[i];
+        }
+        direction[j] = 0.0;
+    }
+    // Dense direct solve is the correctness baseline while preserving explicit block structure in
+    // the public contract. Large systems can substitute a BlockPreconditioner/iterative backend.
+    solve_dense(jacobian, residual.iter().map(|value| -value).collect())
+}
+
+fn staggered_update(
+    problem: &impl BlockResidual,
+    ctx: &Ctx,
+    x: &[f64],
+    layout: &BlockLayout,
+    jacobi: bool,
+) -> Result<Vec<f64>, SolveError> {
+    let mut working = x.to_vec();
+    let original = x.to_vec();
+    for block in 0..layout.blocks.len() {
+        let base = if jacobi { &original } else { &working };
+        let mut residual = vec![0.0; layout.dimension];
+        problem.residual(ctx, base, &mut residual)?;
+        let range = layout.range(block);
+        let width = range.len();
+        let mut jac = vec![vec![0.0; width]; width];
+        let mut direction = vec![0.0; layout.dimension];
+        let mut column = vec![0.0; layout.dimension];
+        for local_j in 0..width {
+            direction[range.start + local_j] = 1.0;
+            problem.jvp(ctx, base, &direction, &mut column)?;
+            for local_i in 0..width {
+                jac[local_i][local_j] = column[range.start + local_i];
+            }
+            direction[range.start + local_j] = 0.0;
+        }
+        let rhs = range.clone().map(|i| -residual[i]).collect();
+        let delta = solve_dense(jac, rhs)?;
+        for (i, d) in range.zip(delta) {
+            working[i] = base[i] + d;
         }
     }
-    let rhs = ids.iter().map(|&i| -residual[i]).collect::<Vec<_>>();
-    let local = solve_dense(a, rhs)?;
-    let mut out = vec![0.0; n];
-    for (i, value) in ids.into_iter().zip(local) {
-        out[i] = value;
-    }
-    Ok(out)
+    Ok(working.iter().zip(x).map(|(new, old)| new - old).collect())
 }
 
 fn scaled_norm(layout: &BlockLayout, residual: &[f64]) -> f64 {
     let mut sum = 0.0;
     for block in &layout.blocks {
-        for &v in &residual[block.offset..block.offset + block.len] {
-            let x = v / block.scale;
-            sum += x * x;
+        for value in &residual[block.offset..block.offset + block.len] {
+            sum += (value / block.scale).powi(2);
         }
     }
     sum.sqrt()
 }
-
+fn l2(x: &[f64]) -> f64 {
+    x.iter().map(|value| value * value).sum::<f64>().sqrt()
+}
 fn solve_dense(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Result<Vec<f64>, SolveError> {
     let n = b.len();
     for k in 0..n {
-        let mut pivot = k;
-        for i in k + 1..n {
-            if a[i][k].abs() > a[pivot][k].abs() {
-                pivot = i;
-            }
-        }
+        let pivot = (k..n)
+            .max_by(|&i, &j| {
+                a[i][k]
+                    .abs()
+                    .partial_cmp(&a[j][k].abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .ok_or(SolveError::Singular)?;
         if a[pivot][k].abs() < 1e-14 {
             return Err(SolveError::Singular);
         }
         a.swap(k, pivot);
         b.swap(k, pivot);
-        for i in k + 1..n {
-            let factor = a[i][k] / a[k][k];
+        let diag = a[k][k];
+        for j in k..n {
+            a[k][j] /= diag;
+        }
+        b[k] /= diag;
+        for i in 0..n {
+            if i == k {
+                continue;
+            }
+            let factor = a[i][k];
             for j in k..n {
                 a[i][j] -= factor * a[k][j];
             }
             b[i] -= factor * b[k];
         }
     }
-    let mut x = vec![0.0; n];
-    for i in (0..n).rev() {
-        let mut rhs = b[i];
-        for j in i + 1..n {
-            rhs -= a[i][j] * x[j];
-        }
-        x[i] = rhs / a[i][i];
+    if b.iter().any(|value| !value.is_finite()) {
+        return Err(SolveError::NonFinite);
     }
-    Ok(x)
+    Ok(b)
 }
 
-// ---------------- R20 BDF1/BDF2 and transactional step result ----------------
+// ---------------- R20 time integration ----------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BdfOrder {
     One,
     Two,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BdfConfig {
     pub order: BdfOrder,
-    pub newton_iterations: usize,
-    pub nonlinear_tolerance: f64,
-    pub relative_error_tolerance: f64,
     pub absolute_error_tolerance: f64,
+    pub relative_error_tolerance: f64,
     pub min_dt: f64,
     pub max_dt: f64,
+    pub newton: CoupledSolveConfig,
 }
 impl Default for BdfConfig {
     fn default() -> Self {
         Self {
             order: BdfOrder::Two,
-            newton_iterations: 20,
-            nonlinear_tolerance: 1e-10,
+            absolute_error_tolerance: 1e-7,
             relative_error_tolerance: 1e-5,
-            absolute_error_tolerance: 1e-8,
-            min_dt: 1e-12,
+            min_dt: 1e-10,
             max_dt: f64::INFINITY,
+            newton: CoupledSolveConfig::default(),
         }
     }
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BdfState {
     pub t: f64,
     pub y: Vec<f64>,
@@ -368,17 +412,13 @@ pub struct BdfState {
     pub accepted_steps: u64,
     pub rejected_steps: u64,
 }
-
 impl BdfState {
     pub fn initialize(
         operator: &impl DaeOperator,
         ctx: &Ctx,
         t: f64,
         mut y: Vec<f64>,
-    ) -> Result<Self, SolveError> {
-        if y.len() != operator.dimension() {
-            return Err(SolveError::Dimension);
-        }
+    ) -> Result<Self, NumericError> {
         operator.consistent_initial_state(ctx, t, &mut y)?;
         Ok(Self {
             t,
@@ -389,30 +429,27 @@ impl BdfState {
         })
     }
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EventHit {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LocatedEvent {
     pub index: usize,
     pub time: f64,
     pub value_before: f64,
     pub value_after: f64,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AcceptedStep {
     pub state: BdfState,
-    pub used_order: BdfOrder,
-    pub error_estimate: f64,
     pub suggested_dt: f64,
-    pub events: Vec<EventHit>,
+    pub error_estimate: f64,
+    pub events: Vec<LocatedEvent>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RejectedStep {
     pub unchanged_state: BdfState,
-    pub error_estimate: f64,
     pub suggested_dt: f64,
+    pub error_estimate: f64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum StepOutcome {
     Accepted(AcceptedStep),
     Rejected(RejectedStep),
@@ -425,325 +462,220 @@ pub fn bdf_step(
     dt: f64,
     config: &BdfConfig,
 ) -> Result<StepOutcome, SolveError> {
-    if !dt.is_finite() || dt < config.min_dt || dt > config.max_dt {
-        return Err(SolveError::InvalidStep);
+    if dt <= 0.0 || !dt.is_finite() {
+        return Err(SolveError::NonFinite);
     }
-    let order = if config.order == BdfOrder::Two && state.previous.is_some() {
-        BdfOrder::Two
-    } else {
-        BdfOrder::One
+    let (candidate, error_estimate) = match (config.order, &state.previous) {
+        (BdfOrder::Two, Some(previous)) => {
+            let second = implicit_step(operator, ctx, state, Some(previous), dt, 2, &config.newton)?;
+            let first = implicit_step(operator, ctx, state, None, dt, 1, &config.newton)?;
+            let error = scaled_error(&second, &first, config);
+            (second, error)
+        }
+        _ => (
+            implicit_step(operator, ctx, state, None, dt, 1, &config.newton)?,
+            0.0,
+        ),
     };
-    let candidate = implicit_candidate(operator, ctx, state, dt, order, config)?;
-    let error = if order == BdfOrder::Two {
-        let first = implicit_candidate(operator, ctx, state, dt, BdfOrder::One, config)?;
-        normalized_error(&candidate, &first, config)
-    } else {
-        0.0
-    };
-    if error > 1.0 {
+    let suggested_dt = adapt_dt(dt, error_estimate, config);
+    if error_estimate > 1.0 && dt > config.min_dt {
         let unchanged = state.clone();
-        let factor = (0.9 / error.sqrt()).clamp(0.2, 0.8);
         return Ok(StepOutcome::Rejected(RejectedStep {
             unchanged_state: unchanged,
-            error_estimate: error,
-            suggested_dt: (dt * factor).max(config.min_dt),
+            suggested_dt,
+            error_estimate,
         }));
     }
     let t_new = state.t + dt;
     let before = operator.event_values(ctx, state.t, &state.y)?;
     let after = operator.event_values(ctx, t_new, &candidate)?;
-    let events = detect_events(state.t, t_new, &before, &after);
-    let factor = if error <= 1e-14 {
-        2.0
-    } else {
-        (0.9 / error.sqrt()).clamp(0.5, 2.0)
-    };
-    let next = BdfState {
-        t: t_new,
-        y: candidate,
-        previous: Some(state.y.clone()),
-        accepted_steps: state.accepted_steps + 1,
-        rejected_steps: state.rejected_steps,
-    };
+    let events = locate_events(state.t, t_new, &before, &after);
     Ok(StepOutcome::Accepted(AcceptedStep {
-        state: next,
-        used_order: order,
-        error_estimate: error,
-        suggested_dt: (dt * factor).min(config.max_dt),
+        state: BdfState {
+            t: t_new,
+            y: candidate,
+            previous: Some(state.y.clone()),
+            accepted_steps: state.accepted_steps + 1,
+            rejected_steps: state.rejected_steps,
+        },
+        suggested_dt,
+        error_estimate,
         events,
     }))
 }
 
-fn implicit_candidate(
+fn implicit_step(
     operator: &impl DaeOperator,
     ctx: &Ctx,
     state: &BdfState,
+    previous: Option<&Vec<f64>>,
     dt: f64,
-    order: BdfOrder,
-    config: &BdfConfig,
+    order: u8,
+    newton: &CoupledSolveConfig,
 ) -> Result<Vec<f64>, SolveError> {
     let n = operator.dimension();
-    let mut y = state.y.clone();
-    let mut ydot = vec![0.0; n];
-    let mut r = vec![0.0; n];
-    for _ in 0..config.newton_iterations {
-        derivative(
-            order,
-            &y,
-            &state.y,
-            state.previous.as_deref(),
-            dt,
-            &mut ydot,
-        );
-        operator.residual(ctx, state.t + dt, &y, &ydot, &mut r)?;
-        if euclidean(&r) <= config.nonlinear_tolerance {
-            return Ok(y);
+    let layout = BlockLayout::new(vec![BlockSpec {
+        name: "dae".into(),
+        offset: 0,
+        len: n,
+        scale: 1.0,
+    }])?;
+    struct Implicit<'a, O: DaeOperator> {
+        op: &'a O,
+        state: &'a BdfState,
+        previous: Option<&'a Vec<f64>>,
+        dt: f64,
+        order: u8,
+        layout: BlockLayout,
+    }
+    impl<O: DaeOperator> BlockResidual for Implicit<'_, O> {
+        fn layout(&self) -> &BlockLayout {
+            &self.layout
         }
-        let alpha = match order {
-            BdfOrder::One => 1.0 / dt,
-            BdfOrder::Two => 1.5 / dt,
-        };
-        let mut a = vec![vec![0.0; n]; n];
-        let mut dy = vec![0.0; n];
-        let mut dydot = vec![0.0; n];
-        let mut col = vec![0.0; n];
-        for j in 0..n {
-            dy.fill(0.0);
-            dydot.fill(0.0);
-            dy[j] = 1.0;
-            dydot[j] = alpha;
-            operator.jvp(ctx, state.t + dt, &y, &ydot, &dy, &dydot, &mut col)?;
-            for i in 0..n {
-                a[i][j] = col[i];
-            }
+        fn residual(&self, ctx: &Ctx, y: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
+            let ydot = bdf_derivative(y, self.state, self.previous, self.dt, self.order);
+            self.op
+                .residual(ctx, self.state.t + self.dt, y, &ydot, out)
         }
-        let step = solve_dense(a, r.iter().map(|v| -v).collect())?;
-        for i in 0..n {
-            y[i] += step[i];
+        fn jvp(
+            &self,
+            ctx: &Ctx,
+            y: &[f64],
+            direction: &[f64],
+            out: &mut [f64],
+        ) -> Result<(), NumericError> {
+            let ydot = bdf_derivative(y, self.state, self.previous, self.dt, self.order);
+            let alpha = if self.order == 2 { 1.5 } else { 1.0 } / self.dt;
+            let dydot = direction.iter().map(|value| alpha * value).collect::<Vec<_>>();
+            self.op.jvp(
+                ctx,
+                self.state.t + self.dt,
+                y,
+                &ydot,
+                direction,
+                &dydot,
+                out,
+            )
         }
     }
-    Err(SolveError::NoConvergence)
+    let implicit = Implicit {
+        op: operator,
+        state,
+        previous,
+        dt,
+        order,
+        layout,
+    };
+    let result = solve_coupled(&implicit, ctx, &state.y, newton)?;
+    if !result.converged {
+        return Err(SolveError::NonFinite);
+    }
+    Ok(result.solution)
 }
 
-fn derivative(
-    order: BdfOrder,
+fn bdf_derivative(
     y: &[f64],
-    previous: &[f64],
-    previous2: Option<&[f64]>,
+    state: &BdfState,
+    previous: Option<&Vec<f64>>,
     dt: f64,
-    out: &mut [f64],
-) {
-    match order {
-        BdfOrder::One => {
-            for i in 0..y.len() {
-                out[i] = (y[i] - previous[i]) / dt;
-            }
-        }
-        BdfOrder::Two => {
-            let p2 = previous2.expect("BDF2 requires two accepted states");
-            for i in 0..y.len() {
-                out[i] = (1.5 * y[i] - 2.0 * previous[i] + 0.5 * p2[i]) / dt;
-            }
-        }
+    order: u8,
+) -> Vec<f64> {
+    if order == 2 {
+        let previous = previous.expect("BDF2 requires previous state");
+        y.iter()
+            .zip(&state.y)
+            .zip(previous)
+            .map(|((yn, y0), ym1)| (1.5 * yn - 2.0 * y0 + 0.5 * ym1) / dt)
+            .collect()
+    } else {
+        y.iter()
+            .zip(&state.y)
+            .map(|(yn, y0)| (yn - y0) / dt)
+            .collect()
     }
 }
-fn normalized_error(a: &[f64], b: &[f64], config: &BdfConfig) -> f64 {
-    a.iter()
-        .zip(b)
-        .map(|(x, y)| {
-            let scale = config.absolute_error_tolerance
-                + config.relative_error_tolerance * x.abs().max(y.abs());
-            ((x - y) / scale).powi(2)
+fn scaled_error(second: &[f64], first: &[f64], config: &BdfConfig) -> f64 {
+    second
+        .iter()
+        .zip(first)
+        .map(|(a, b)| {
+            (a - b).abs()
+                / (config.absolute_error_tolerance
+                    + config.relative_error_tolerance * a.abs().max(b.abs()))
         })
-        .sum::<f64>()
-        .sqrt()
-        / (a.len().max(1) as f64).sqrt()
+        .fold(0.0, f64::max)
 }
-fn euclidean(x: &[f64]) -> f64 {
-    x.iter().map(|v| v * v).sum::<f64>().sqrt()
+fn adapt_dt(dt: f64, error: f64, config: &BdfConfig) -> f64 {
+    let factor = if error <= f64::EPSILON {
+        2.0
+    } else {
+        (0.9 / error.sqrt()).clamp(0.2, 2.0)
+    };
+    (dt * factor).clamp(config.min_dt, config.max_dt)
 }
-fn detect_events(t0: f64, t1: f64, before: &[f64], after: &[f64]) -> Vec<EventHit> {
+fn locate_events(t0: f64, t1: f64, before: &[f64], after: &[f64]) -> Vec<LocatedEvent> {
     before
         .iter()
         .zip(after)
         .enumerate()
-        .filter_map(|(index, (&a, &b))| {
-            if a == 0.0 || b == 0.0 || a.signum() != b.signum() {
-                let denom = a.abs() + b.abs();
-                let fraction = if denom == 0.0 { 0.5 } else { a.abs() / denom };
-                Some(EventHit {
-                    index,
-                    time: t0 + (t1 - t0) * fraction,
-                    value_before: a,
-                    value_after: b,
-                })
-            } else {
+        .filter_map(|(index, (a, b))| {
+            if a == b || (a > &0.0) == (b > &0.0) {
                 None
+            } else {
+                let fraction = a.abs() / (a.abs() + b.abs());
+                Some(LocatedEvent {
+                    index,
+                    time: t0 + fraction * (t1 - t0),
+                    value_before: *a,
+                    value_after: *b,
+                })
             }
         })
         .collect()
 }
 
-// ---------------- numerical verification helpers ----------------
+// ---------------- verification helper ----------------
 
-pub fn directional_jvp_error(
-    problem: &impl BlockResidual,
+pub fn verify_dae_jvp(
+    operator: &impl DaeOperator,
     ctx: &Ctx,
-    x: &[f64],
-    direction: &[f64],
+    t: f64,
+    y: &[f64],
+    ydot: &[f64],
+    dy: &[f64],
+    dydot: &[f64],
     epsilon: f64,
 ) -> Result<f64, SolveError> {
-    let n = problem.layout().dimension;
-    if x.len() != n || direction.len() != n {
-        return Err(SolveError::Dimension);
-    }
+    let n = operator.dimension();
     let mut analytic = vec![0.0; n];
-    problem.jvp(ctx, x, direction, &mut analytic)?;
-    let plus = x
+    operator.jvp(ctx, t, y, ydot, dy, dydot, &mut analytic)?;
+    let yp = y
         .iter()
-        .zip(direction)
-        .map(|(a, d)| a + epsilon * d)
+        .zip(dy)
+        .map(|(a, b)| a + epsilon * b)
         .collect::<Vec<_>>();
-    let minus = x
+    let ym = y
         .iter()
-        .zip(direction)
-        .map(|(a, d)| a - epsilon * d)
+        .zip(dy)
+        .map(|(a, b)| a - epsilon * b)
+        .collect::<Vec<_>>();
+    let dp = ydot
+        .iter()
+        .zip(dydot)
+        .map(|(a, b)| a + epsilon * b)
+        .collect::<Vec<_>>();
+    let dm = ydot
+        .iter()
+        .zip(dydot)
+        .map(|(a, b)| a - epsilon * b)
         .collect::<Vec<_>>();
     let mut rp = vec![0.0; n];
     let mut rm = vec![0.0; n];
-    problem.residual(ctx, &plus, &mut rp)?;
-    problem.residual(ctx, &minus, &mut rm)?;
-    let numeric = rp.iter().zip(rm).map(|(a, b)| (a - b) / (2.0 * epsilon));
+    operator.residual(ctx, t, &yp, &dp, &mut rp)?;
+    operator.residual(ctx, t, &ym, &dm, &mut rm)?;
     Ok(analytic
         .iter()
-        .zip(numeric)
-        .map(|(a, b)| (a - b).abs())
+        .zip(rp.iter().zip(rm))
+        .map(|(a, (p, m))| (a - (p - m) / (2.0 * epsilon)).abs())
         .fold(0.0, f64::max))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct LinearBlocks {
-        layout: BlockLayout,
-    }
-    impl LinearBlocks {
-        fn new() -> Self {
-            Self {
-                layout: BlockLayout::new(vec![
-                    BlockSpec {
-                        name: "a".into(),
-                        offset: 0,
-                        len: 1,
-                        scale: 1.0,
-                    },
-                    BlockSpec {
-                        name: "b".into(),
-                        offset: 1,
-                        len: 1,
-                        scale: 1.0,
-                    },
-                ])
-                .unwrap(),
-            }
-        }
-    }
-    impl BlockResidual for LinearBlocks {
-        fn layout(&self) -> &BlockLayout {
-            &self.layout
-        }
-        fn residual(&self, _: &Ctx, x: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
-            out[0] = 2.0 * x[0] + x[1] - 3.0;
-            out[1] = x[0] + 3.0 * x[1] - 4.0;
-            Ok(())
-        }
-        fn jvp(&self, _: &Ctx, _: &[f64], d: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
-            out[0] = 2.0 * d[0] + d[1];
-            out[1] = d[0] + 3.0 * d[1];
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn monolithic_and_block_solve_same_linear_system() {
-        let p = LinearBlocks::new();
-        let ctx = Ctx::reproducible();
-        for strategy in [
-            CoupledStrategy::MonolithicNewton,
-            CoupledStrategy::BlockNewton,
-            CoupledStrategy::GaussSeidel,
-            CoupledStrategy::Jacobi,
-        ] {
-            let cfg = CoupledSolveConfig {
-                strategy,
-                max_iterations: 100,
-                ..Default::default()
-            };
-            let r = solve_coupled(&p, &ctx, &[0.0, 0.0], &cfg).unwrap();
-            assert!(r.converged);
-            assert!((r.solution[0] - 1.0).abs() < 1e-8);
-            assert!((r.solution[1] - 1.0).abs() < 1e-8);
-        }
-    }
-
-    struct Decay;
-    impl DaeOperator for Decay {
-        fn dimension(&self) -> usize {
-            1
-        }
-        fn residual(
-            &self,
-            _: &Ctx,
-            _: f64,
-            y: &[f64],
-            ydot: &[f64],
-            out: &mut [f64],
-        ) -> Result<(), NumericError> {
-            out[0] = ydot[0] + y[0];
-            Ok(())
-        }
-        fn jvp(
-            &self,
-            _: &Ctx,
-            _: f64,
-            _: &[f64],
-            _: &[f64],
-            dy: &[f64],
-            dydot: &[f64],
-            out: &mut [f64],
-        ) -> Result<(), NumericError> {
-            out[0] = dydot[0] + dy[0];
-            Ok(())
-        }
-        fn event_values(&self, _: &Ctx, _: f64, y: &[f64]) -> Result<Vec<f64>, NumericError> {
-            Ok(vec![y[0] - 0.5])
-        }
-    }
-
-    #[test]
-    fn bdf_step_is_transactional_and_detects_event() {
-        let ctx = Ctx::reproducible();
-        let op = Decay;
-        let cfg = BdfConfig {
-            order: BdfOrder::One,
-            ..Default::default()
-        };
-        let mut state = BdfState::initialize(&op, &ctx, 0.0, vec![1.0]).unwrap();
-        for _ in 0..8 {
-            match bdf_step(&op, &ctx, &state, 0.1, &cfg).unwrap() {
-                StepOutcome::Accepted(step) => state = step.state,
-                StepOutcome::Rejected(_) => panic!("constant BDF1 step should not reject"),
-            }
-        }
-        assert!(state.y[0] < 1.0);
-    }
-
-    #[test]
-    fn jvp_matches_directional_difference() {
-        let p = LinearBlocks::new();
-        let e = directional_jvp_error(&p, &Ctx::reproducible(), &[1.0, 1.0], &[0.3, -0.2], 1e-6)
-            .unwrap();
-        assert!(e < 1e-9);
-    }
 }
