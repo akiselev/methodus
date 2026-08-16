@@ -112,7 +112,7 @@ pub enum CoupledStrategy {
     Jacobi,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CoupledSolveConfig {
     pub strategy: CoupledStrategy,
     pub max_iterations: usize,
@@ -301,9 +301,13 @@ fn staggered_update(
     let mut working = x.to_vec();
     let original = x.to_vec();
     for block in 0..layout.blocks.len() {
-        let base = if jacobi { &original } else { &working };
+        let base = if jacobi {
+            original.clone()
+        } else {
+            working.clone()
+        };
         let mut residual = vec![0.0; layout.dimension];
-        problem.residual(ctx, base, &mut residual)?;
+        problem.residual(ctx, &base, &mut residual)?;
         let range = layout.range(block);
         let width = range.len();
         let mut jac = vec![vec![0.0; width]; width];
@@ -311,7 +315,7 @@ fn staggered_update(
         let mut column = vec![0.0; layout.dimension];
         for local_j in 0..width {
             direction[range.start + local_j] = 1.0;
-            problem.jvp(ctx, base, &direction, &mut column)?;
+            problem.jvp(ctx, &base, &direction, &mut column)?;
             for local_i in 0..width {
                 jac[local_i][local_j] = column[range.start + local_i];
             }
@@ -467,7 +471,8 @@ pub fn bdf_step(
     }
     let (candidate, error_estimate) = match (config.order, &state.previous) {
         (BdfOrder::Two, Some(previous)) => {
-            let second = implicit_step(operator, ctx, state, Some(previous), dt, 2, &config.newton)?;
+            let second =
+                implicit_step(operator, ctx, state, Some(previous), dt, 2, &config.newton)?;
             let first = implicit_step(operator, ctx, state, None, dt, 1, &config.newton)?;
             let error = scaled_error(&second, &first, config);
             (second, error)
@@ -534,8 +539,7 @@ fn implicit_step(
         }
         fn residual(&self, ctx: &Ctx, y: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
             let ydot = bdf_derivative(y, self.state, self.previous, self.dt, self.order);
-            self.op
-                .residual(ctx, self.state.t + self.dt, y, &ydot, out)
+            self.op.residual(ctx, self.state.t + self.dt, y, &ydot, out)
         }
         fn jvp(
             &self,
@@ -546,7 +550,10 @@ fn implicit_step(
         ) -> Result<(), NumericError> {
             let ydot = bdf_derivative(y, self.state, self.previous, self.dt, self.order);
             let alpha = if self.order == 2 { 1.5 } else { 1.0 } / self.dt;
-            let dydot = direction.iter().map(|value| alpha * value).collect::<Vec<_>>();
+            let dydot = direction
+                .iter()
+                .map(|value| alpha * value)
+                .collect::<Vec<_>>();
             self.op.jvp(
                 ctx,
                 self.state.t + self.dt,

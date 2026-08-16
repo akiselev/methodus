@@ -3,7 +3,9 @@ use solverang_scientific::{bdf_step, BdfConfig, BdfOrder, BdfState, DaeOperator,
 
 struct DecayWithEvent;
 impl DaeOperator for DecayWithEvent {
-    fn dimension(&self) -> usize { 1 }
+    fn dimension(&self) -> usize {
+        1
+    }
 
     fn residual(
         &self,
@@ -102,10 +104,14 @@ fn event_location_preserves_bdf_history() {
         };
         if !accepted.events.is_empty() {
             saw_event = true;
-            assert_eq!(accepted.state.previous.as_deref(), Some(previous_y.as_slice()));
-            assert!(accepted.events.iter().all(|event| {
-                event.time >= state.t && event.time <= accepted.state.t
-            }));
+            assert_eq!(
+                accepted.state.previous.as_deref(),
+                Some(previous_y.as_slice())
+            );
+            assert!(accepted
+                .events
+                .iter()
+                .all(|event| { event.time >= state.t && event.time <= accepted.state.t }));
         }
         state = accepted.state;
     }

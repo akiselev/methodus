@@ -32,12 +32,7 @@ impl BlockPreconditioner for BlockDiagonalPreconditioner {
         &self.layout
     }
 
-    fn apply_inverse(
-        &self,
-        _ctx: &Ctx,
-        rhs: &[f64],
-        out: &mut [f64],
-    ) -> Result<(), NumericError> {
+    fn apply_inverse(&self, _ctx: &Ctx, rhs: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
         if rhs.len() != self.layout.dimension || out.len() != self.layout.dimension {
             return Err(NumericError::DimensionMismatch {
                 expected: self.layout.dimension,
@@ -109,12 +104,7 @@ impl BlockPreconditioner for BlockLowerTriangularPreconditioner {
         &self.layout
     }
 
-    fn apply_inverse(
-        &self,
-        _ctx: &Ctx,
-        rhs: &[f64],
-        out: &mut [f64],
-    ) -> Result<(), NumericError> {
+    fn apply_inverse(&self, _ctx: &Ctx, rhs: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
         if rhs.len() != self.layout.dimension || out.len() != self.layout.dimension {
             return Err(NumericError::DimensionMismatch {
                 expected: self.layout.dimension,
