@@ -22,7 +22,7 @@ jobs:
           from pathlib import Path
           p = Path('crates/scientific/src/lib.rs')
           s = p.read_text()
-          old = '        let mut unchanged = state.clone();\n        unchanged.rejected_steps += 1;'
+          old = '        let mut unchanged = state.clone(); unchanged.rejected_steps += 1;'
           new = '        let unchanged = state.clone();'
           if old not in s:
               raise SystemExit('rejected-state mutation target not found')
