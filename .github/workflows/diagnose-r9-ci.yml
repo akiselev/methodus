@@ -1,0 +1,32 @@
+name: diagnose-r9-ci
+on:
+  push:
+    branches: [agent/r0-r9-resolvent-foundation]
+permissions:
+  contents: write
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r0-r9-resolvent-foundation
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - shell: bash
+        run: |
+          set +e
+          cargo fmt --all -- --check > r9-fmt.txt 2>&1
+          echo "fmt_status=$?" >> r9-fmt.txt
+          cargo test --workspace --all-features > r9-test.txt 2>&1
+          echo "test_status=$?" >> r9-test.txt
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps > r9-doc.txt 2>&1
+          echo "doc_status=$?" >> r9-doc.txt
+          rm .github/workflows/diagnose-r9-ci.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add r9-fmt.txt r9-test.txt r9-doc.txt .github/workflows/diagnose-r9-ci.yml
+          git commit -m "capture remaining R9 CI diagnostics"
+          git push origin HEAD:agent/r0-r9-resolvent-foundation
