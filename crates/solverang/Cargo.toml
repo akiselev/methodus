@@ -19,7 +19,7 @@ std = []
 parallel = ["rayon"]
 sparse = ["faer"]
 macros = ["solverang_macros"]
-jit = ["dep:anvil"]
+jit = ["dep:malleus"]
 nist = []
 
 [dependencies]
@@ -36,9 +36,9 @@ faer = { version = "0.22", optional = true }
 solverang_macros = { version = "0.1.0", path = "../macros", optional = true }
 
 # Transitional compatibility surface for Solverang's historical JIT API. The authoritative
-# optimized Anvil compiler remains a separate execution backend; this local adapter keeps
+# optimized Malleus compiler remains a separate execution backend; this local adapter keeps
 # Solverang portable and its all-features API testable without an absolute filesystem path.
-anvil = { package = "sinbad-anvil", path = "../anvil-compat", optional = true }
+malleus = { package = "sinbad-malleus", path = "../malleus-compat", optional = true }
 
 [dev-dependencies]
 proptest = "1.4"

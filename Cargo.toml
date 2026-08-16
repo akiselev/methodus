@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/contracts",
-    "crates/anvil-compat",
+    "crates/malleus-compat",
     "crates/solverang",
     "crates/macros",
 ]

@@ -15,7 +15,7 @@ the SINBAD M3 first-transient-result path). New, additive; the pre-existing ~107
 default-feature tests stay green (now 1093 with +22 integrator tests).
 
 - **New dep:** `numeric-contracts` (pkg `sinbad-numeric-contracts`, path-dep to
-  `/home/dev/sinbad`), mirroring the existing `anvil` path-dep. solverang consumes the
+  `/home/dev/sinbad`), mirroring the existing `malleus` path-dep. solverang consumes the
   `DaeResidual` / `IntegratorCoeffs` seam (types + traits only) to integrate a
   first-order DAE `d/dt q(x,t) + g(x,t) = 0` **without importing the physics-assembly
   crate**. Only `f64` slices cross the boundary, so the crate's transitive `nalgebra`

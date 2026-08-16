@@ -38,7 +38,7 @@ least squares, sparse/direct/iterative orchestration, DAE/ODE integration, conti
 branch tracking and optimization. Resolvent's `OperatorProgram` describes the mathematical
 problem; it does not decide how to solve it.
 
-Anvil remains responsible for compiled finite-precision residual/JVP/VJP execution. Solverang
+Malleus remains responsible for compiled finite-precision residual/JVP/VJP execution. Solverang
 does not reacquire its old JIT implementation.
 
 ## Diagnostics are layered

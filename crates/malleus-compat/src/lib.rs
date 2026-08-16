@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
-//! Transitional Solverang-side compatibility surface for Anvil.
+//! Transitional Solverang-side compatibility surface for Malleus.
 //!
-//! The production compiler remains `sinbad-anvil`. This crate removes Solverang's absolute
+//! The production compiler remains `sinbad-malleus`. This crate removes Solverang's absolute
 //! `/home/dev/sinbad` dependency while retaining the historical opcode/JIT API. Its compiler
 //! is a deterministic portable evaluator: it is an oracle/fallback, not the optimized
-//! Cranelift backend. Sinbad's Resolvent adapter targets the authoritative Anvil crate.
+//! Cranelift backend. Sinbad's Resolvent adapter targets the authoritative Malleus crate.
 
 use thiserror::Error;
 

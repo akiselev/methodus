@@ -1,10 +1,10 @@
 [package]
-name = "sinbad-anvil"
+name = "sinbad-malleus"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Solverang compatibility surface for the external Anvil execution backend"
+description = "Solverang compatibility surface for the external Malleus execution backend"
 
 [features]
 default = ["jit"]
