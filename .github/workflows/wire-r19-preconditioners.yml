@@ -1,0 +1,36 @@
+name: wire-r19-preconditioners
+on:
+  push:
+    branches:
+      - agent/r13-r20-wave-a-f
+permissions:
+  contents: write
+jobs:
+  wire:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r13-r20-wave-a-f
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('crates/scientific/src/lib.rs')
+          s=p.read_text()
+          if 'pub mod preconditioners;' not in s:
+              marker='use std::collections::BTreeMap;'
+              s=s.replace(marker, 'pub mod preconditioners;\n\n'+marker, 1)
+          p.write_text(s)
+          PY
+          cargo fmt --all
+          git rm .github/workflows/wire-r19-preconditioners.yml
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Expose R19 physics-neutral block preconditioners'
+          git push origin HEAD:agent/r13-r20-wave-a-f
