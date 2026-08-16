@@ -18,12 +18,14 @@
 //!
 //! - **Symbolic export is an optional capability, not the primary interface.** A
 //!   constraint may emit the same residual equations through a dependency-neutral
-//!   [`SymbolicSink`](crate::symbolic::SymbolicSink). Existing constraints and consumers
-//!   remain purely numerical unless they opt into that path.
+//!   [`SymbolicSink`]. Existing constraints and consumers remain purely numerical unless
+//!   they opt into that path.
+
+pub mod symbolic;
 
 use crate::id::{ConstraintId, EntityId, ParamId};
 use crate::param::ParamStore;
-use crate::symbolic::{SymbolicNode, SymbolicSink};
+use symbolic::{SymbolicNode, SymbolicSink};
 
 /// A constraint: a set of equations over parameters.
 ///
