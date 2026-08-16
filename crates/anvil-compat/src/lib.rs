@@ -61,7 +61,7 @@ pub fn jit_available()->bool{true}
 pub struct JITCompiler;
 impl JITCompiler{pub fn new()->Result<Self,JITError>{Ok(Self)}pub fn compile(&mut self,c:&CompiledConstraints)->Result<JITFunction,JITError>{c.validate().map_err(|e|JITError::Validation(e.to_string()))?;Ok(JITFunction{compiled:c.clone()})}}
 
-#[derive(Clone)]pub struct JITFunction{compiled:CompiledConstraints}
+#[derive(Clone, Debug)]pub struct JITFunction{compiled:CompiledConstraints}
 impl JITFunction{
  pub fn variable_count(&self)->usize{self.compiled.n_vars}pub fn residual_count(&self)->usize{self.compiled.n_residuals}
  pub fn evaluate_residuals(&self,vars:&[f64],out:&mut[f64]){run(&self.compiled.residual_ops,self.compiled.max_register,vars,Some(out),None,None)}
