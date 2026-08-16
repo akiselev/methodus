@@ -1,0 +1,13 @@
+[package]
+name = "solverang-scientific"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Physics-neutral block nonlinear and implicit DAE algorithms for Solverang"
+repository = "https://github.com/akiselev/solverang"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+solverang-contracts = { path = "../contracts" }
+thiserror = "2"
