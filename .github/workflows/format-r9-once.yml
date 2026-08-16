@@ -1,0 +1,26 @@
+name: format-r9-once
+on:
+  push:
+    branches: [agent/r0-r9-resolvent-foundation]
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r0-r9-resolvent-foundation
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all
+      - shell: bash
+        run: |
+          rm -f r9-fmt.txt r9-test.txt r9-doc.txt r9-summary.txt .github/workflows/format-r9-once.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add --all
+          git commit -m "format portable Solverang R9 workspace"
+          git push origin HEAD:agent/r0-r9-resolvent-foundation
