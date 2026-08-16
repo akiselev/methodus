@@ -1,0 +1,34 @@
+name: repair-build-once
+on:
+  push:
+    branches: [agent/r0-r9-resolvent-foundation]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r0-r9-resolvent-foundation
+      - name: Repair compatibility JIT Debug contract
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('crates/anvil-compat/src/lib.rs')
+          t = p.read_text()
+          old = '#[derive(Clone)]pub struct JITFunction{compiled:CompiledConstraints}'
+          new = '#[derive(Clone, Debug)]pub struct JITFunction{compiled:CompiledConstraints}'
+          if old not in t:
+              raise SystemExit('JITFunction derive marker missing')
+          p.write_text(t.replace(old, new, 1))
+          Path('ci-build.txt').unlink(missing_ok=True)
+          Path('.github/workflows/repair-build-once.yml').unlink()
+      - name: Commit
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add --all
+          git commit -m "repair portable Anvil compatibility build"
+          git push origin HEAD:agent/r0-r9-resolvent-foundation
