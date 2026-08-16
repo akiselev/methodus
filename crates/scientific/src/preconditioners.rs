@@ -12,20 +12,32 @@ pub struct BlockDiagonalPreconditioner {
 
 impl BlockDiagonalPreconditioner {
     pub fn new(layout: BlockLayout, inverse_diagonal: Vec<f64>) -> Result<Self, NumericError> {
-        if inverse_diagonal.len() != layout.dimension || inverse_diagonal.iter().any(|x| !x.is_finite()) {
+        if inverse_diagonal.len() != layout.dimension
+            || inverse_diagonal.iter().any(|x| !x.is_finite())
+        {
             return Err(NumericError::DimensionMismatch {
                 expected: layout.dimension,
                 got: inverse_diagonal.len(),
             });
         }
-        Ok(Self { layout, inverse_diagonal })
+        Ok(Self {
+            layout,
+            inverse_diagonal,
+        })
     }
 }
 
 impl BlockPreconditioner for BlockDiagonalPreconditioner {
-    fn layout(&self) -> &BlockLayout { &self.layout }
+    fn layout(&self) -> &BlockLayout {
+        &self.layout
+    }
 
-    fn apply_inverse(&self, _ctx: &Ctx, rhs: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
+    fn apply_inverse(
+        &self,
+        _ctx: &Ctx,
+        rhs: &[f64],
+        out: &mut [f64],
+    ) -> Result<(), NumericError> {
         if rhs.len() != self.layout.dimension || out.len() != self.layout.dimension {
             return Err(NumericError::DimensionMismatch {
                 expected: self.layout.dimension,
@@ -71,7 +83,9 @@ impl BlockLowerTriangularPreconditioner {
         }
         for block in &lower_blocks {
             if block.row_block >= layout.blocks.len() || block.col_block >= block.row_block {
-                return Err(NumericError::Other("invalid lower-triangular block index".into()));
+                return Err(NumericError::Unsupported {
+                    what: "invalid lower-triangular block index".into(),
+                });
             }
             let rows = layout.blocks[block.row_block].len;
             let cols = layout.blocks[block.col_block].len;
@@ -82,14 +96,25 @@ impl BlockLowerTriangularPreconditioner {
                 });
             }
         }
-        Ok(Self { layout, inverse_diagonal, lower_blocks })
+        Ok(Self {
+            layout,
+            inverse_diagonal,
+            lower_blocks,
+        })
     }
 }
 
 impl BlockPreconditioner for BlockLowerTriangularPreconditioner {
-    fn layout(&self) -> &BlockLayout { &self.layout }
+    fn layout(&self) -> &BlockLayout {
+        &self.layout
+    }
 
-    fn apply_inverse(&self, _ctx: &Ctx, rhs: &[f64], out: &mut [f64]) -> Result<(), NumericError> {
+    fn apply_inverse(
+        &self,
+        _ctx: &Ctx,
+        rhs: &[f64],
+        out: &mut [f64],
+    ) -> Result<(), NumericError> {
         if rhs.len() != self.layout.dimension || out.len() != self.layout.dimension {
             return Err(NumericError::DimensionMismatch {
                 expected: self.layout.dimension,
@@ -100,7 +125,11 @@ impl BlockPreconditioner for BlockLowerTriangularPreconditioner {
         for row_block in 0..self.layout.blocks.len() {
             let row = &self.layout.blocks[row_block];
             let mut local = rhs[row.offset..row.offset + row.len].to_vec();
-            for block in self.lower_blocks.iter().filter(|b| b.row_block == row_block) {
+            for block in self
+                .lower_blocks
+                .iter()
+                .filter(|b| b.row_block == row_block)
+            {
                 let col = &self.layout.blocks[block.col_block];
                 for i in 0..row.len {
                     let correction = (0..col.len)
@@ -124,9 +153,20 @@ mod tests {
 
     fn layout() -> BlockLayout {
         BlockLayout::new(vec![
-            BlockSpec { name: "a".into(), offset: 0, len: 1, scale: 1.0 },
-            BlockSpec { name: "b".into(), offset: 1, len: 1, scale: 1.0 },
-        ]).unwrap()
+            BlockSpec {
+                name: "a".into(),
+                offset: 0,
+                len: 1,
+                scale: 1.0,
+            },
+            BlockSpec {
+                name: "b".into(),
+                offset: 1,
+                len: 1,
+                scale: 1.0,
+            },
+        ])
+        .unwrap()
     }
 
     #[test]
@@ -140,8 +180,13 @@ mod tests {
         let t = BlockLowerTriangularPreconditioner::new(
             layout(),
             vec![0.5, 0.25],
-            vec![LowerBlock { row_block: 1, col_block: 0, values: vec![2.0] }],
-        ).unwrap();
+            vec![LowerBlock {
+                row_block: 1,
+                col_block: 0,
+                values: vec![2.0],
+            }],
+        )
+        .unwrap();
         t.apply_inverse(&ctx, &[2.0, 8.0], &mut out).unwrap();
         assert_eq!(out, vec![1.0, 1.5]);
     }
