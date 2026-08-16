@@ -8,32 +8,32 @@ Milestone: Waves B, E, F / R13, R18-R20
 
 Solverang owns physics-neutral numerical contracts and algorithms. It must not understand RSL, materials, function spaces, mesh semantics, or names such as temperature/voltage/displacement/pressure.
 
-## Stable baseline
-
-- `solverang-contracts` provides sparse matrix/operator and DAE seams.
-- Existing Newton/LM/sparse/JIT paths remain available for legacy and geometric consumers.
-- Malleus is the real JIT/compiler boundary; no fake Malleus compatibility crate remains.
-
 ## Implemented on this branch
 
 A new `solverang-scientific` workspace crate isolates the scientific numerical lane from the legacy geometry-facing API.
 
 - R13: general implicit `DaeOperator` contract for `F(t,y,ydot)=0`, JVPs, consistent initialization, and event values.
 - R18: `BlockLayout`, `BlockResidual`, `BlockLinearOperator`, and `BlockPreconditioner` contracts.
-- R19: monolithic Newton, block Newton, Gauss-Seidel/staggered, and Jacobi strategies with per-block scaling and damping/line search traces.
-- R20: BDF1/BDF2 implicit stepping, numerical Newton linearization via JVPs, adaptive error estimate, explicit accepted/rejected outcomes, unchanged-state rejection semantics, consistent-initial-state hook, and zero-crossing event reporting.
+- R19: monolithic Newton, block Newton, Gauss-Seidel/staggered, and Jacobi strategies with per-block scaling and damping/line-search traces.
+- R20: BDF1/BDF2 implicit stepping, JVP-based Newton linearization, adaptive error estimate, explicit accepted/rejected outcomes, bit-identical committed-state rejection semantics, consistent-initial-state hook, and zero-crossing event reporting.
+- R20 acceptance tests cover BDF1 first-order and BDF2 second-order convergence on a manufactured decay problem plus byte-identical rejected state.
 - Verification helper: directional JVP vs centered finite difference.
+- Existing integrator rustdoc links were repaired without changing the numerical API.
 
 ## Validation state
 
-Local Rust validation is unavailable in the execution sandbox because rustup cannot reach its download service. GitHub Actions is the compile/test authority. This branch is not verified until CI is green.
+Local Rust installation is blocked by the execution sandbox's outbound DNS policy; GitHub-hosted Rust jobs are the validation authority.
+
+The latest dedicated rustdoc diagnostic completed with exit code 0, confirming the earlier documentation failure is repaired. Prior normal-CI runs also had build/test, MSRV, and format/clippy green after the scientific adapter fixes. Temporary diagnostics have been removed. This user-authored status commit retriggers the complete normal CI on the current R20 convergence/rejection test tree.
+
+Do not mark the branch fully verified until that complete run is green.
 
 ## Cross-repository contract
 
-Sinbad should adapt its coupled/runtime state to `solverang-scientific` contracts. Solverang must receive only numeric vectors, block layouts, residual/JVP callbacks, scaling, and algorithm configuration.
+Sinbad consumes only numeric vectors, block layouts, residual/JVP callbacks, scaling, and algorithm configuration from this crate. Once the current complete CI is green, Sinbad's Cargo revision and `scientific-stack.lock` should pin that exact Solverang commit.
 
-## Next
+## Remaining before merge
 
-1. Run/fix workspace format, clippy, and tests in GitHub Actions.
-2. Exercise electrothermal and thermoelastic block problems from Sinbad.
-3. Exercise BDF1/BDF2 manufactured transient cases and rejected-step history invariants through Sinbad's transactional state adapter.
+1. Confirm the complete current normal-CI run is green, including the new R20 convergence/rejection tests.
+2. Freeze the resulting revision in Sinbad's federation tuple.
+3. Re-run Sinbad scientific-stack CI against that exact revision.
