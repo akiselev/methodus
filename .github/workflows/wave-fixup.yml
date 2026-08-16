@@ -1,0 +1,77 @@
+name: wave-fixup
+
+on:
+  push:
+    branches: [agent/r13-r20-wave-a-f]
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r13-r20-wave-a-f
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply fixes and format
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('crates/scientific/src/lib.rs')
+          s = p.read_text()
+          old = 'Ok(StepOutcome::Accepted(AcceptedStep { state: next, used_order: order, error_estimate: error, suggested_dt: (dt * factor).min(config.max_dt) }))'
+          new = 'Ok(StepOutcome::Accepted(AcceptedStep { state: next, used_order: order, error_estimate: error, suggested_dt: (dt * factor).min(config.max_dt), events }))'
+          assert old in s
+          s = s.replace(old, new)
+          old = '''            CoupledStrategy::BlockNewton | CoupledStrategy::GaussSeidel => {
+                // A block lower-triangular nonlinear sweep. Re-linearize after every block so
+                // dependencies updated by earlier blocks are immediately visible.
+                let mut total = vec![0.0; n];
+                for b in 0..problem.layout().blocks.len() {
+                    problem.residual(ctx, &x, &mut r)?;
+                    let range = problem.layout().range(b);
+                    let local = newton_step(problem, ctx, &x, &r, range.clone())?;
+                    for i in range { x[i] += local[i]; total[i] += local[i]; }
+                }
+                if config.strategy == CoupledStrategy::GaussSeidel { records.push(IterationRecord { iteration, residual_norm: old_norm, damping: 1.0 }); continue; }
+                total
+            }'''
+          new = '''            CoupledStrategy::BlockNewton | CoupledStrategy::GaussSeidel => {
+                // Lower-triangular nonlinear sweep on a private work vector. Re-linearize after
+                // every block, then expose the aggregate update to the common damping path.
+                let original = x.clone();
+                let mut work = x.clone();
+                let mut work_r = r.clone();
+                for b in 0..problem.layout().blocks.len() {
+                    problem.residual(ctx, &work, &mut work_r)?;
+                    let range = problem.layout().range(b);
+                    let local = newton_step(problem, ctx, &work, &work_r, range.clone())?;
+                    for i in range { work[i] += local[i]; }
+                }
+                let total = work.iter().zip(&original).map(|(a, b)| a - b).collect::<Vec<_>>();
+                if config.strategy == CoupledStrategy::GaussSeidel {
+                    x = work;
+                    records.push(IterationRecord { iteration, residual_norm: old_norm, damping: 1.0 });
+                    continue;
+                }
+                total
+            }'''
+          assert old in s
+          p.write_text(s.replace(old, new))
+          PY
+          cargo fmt --all
+      - name: Commit fixes
+        shell: bash
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/scientific/src/lib.rs
+          git commit -m 'Fix and format scientific solver lane'
+          git push origin HEAD:agent/r13-r20-wave-a-f
