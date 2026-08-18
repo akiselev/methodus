@@ -12,7 +12,7 @@
 //! [`Problem`]: crate::Problem
 //! [`JITSolver`]: crate::JITSolver
 pub use malleus::{
-    CompiledConstraints, CompiledNewtonStep, ConstraintOp, HessianEntry, JITCompiler, JITConfig,
-    JITError, JITFunction, JacobianEntry, JitMode, OpcodeEmitter, Reg, ValidationError,
-    jit_available,
+    jit_available, CompiledConstraints, CompiledNewtonStep, ConstraintOp, HessianEntry,
+    JITCompiler, JITConfig, JITError, JITFunction, JacobianEntry, JitMode, OpcodeEmitter, Reg,
+    ValidationError,
 };
