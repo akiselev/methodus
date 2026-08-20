@@ -15,11 +15,13 @@ The repository is one root package named `solverang`. There are no subordinate c
 - In-place `LinearOperator`, `Preconditioner`, `NonlinearOperator`, and `DaeOperator` traits.
 - `EvaluationContext` for explicit reproducibility policy.
 - Validated contiguous `BlockLayout` and block-aware operator/preconditioner traits.
-- Canonical sorted `CsrMatrix` with deterministic duplicate summation and matrix-vector action.
+- Canonical sorted `CsrMatrix` with input-order-independent duplicate summation and matrix-vector action.
+- Invariant-validated deserialization for CSR matrices, block layouts, preconditioners, and BDF history.
 - Dense Newton correctness baseline with backtracking and residual traces.
 - Monolithic, block Gauss-Seidel, and block Jacobi nonlinear strategies.
 - Block-diagonal and block-lower-triangular preconditioners.
-- BDF1/BDF2 implicit stepping with error-based rejection, consistent initialization, serializable history, restart identity, and zero-crossing events.
+- BDF1 and variable-step BDF2 implicit stepping with error-based rejection, consistent initialization, serializable step-size history, restart identity, and zero-crossing events.
+- Checked dimension, capacity, time, and accepted-step arithmetic on fallible solver paths.
 - Centered-difference checks for nonlinear and DAE Jacobian-vector products.
 
 ## Repository cleanup
@@ -45,7 +47,7 @@ Validated locally on 2026-08-20:
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --all-targets`: passed.
 - `cargo clippy --all-targets -- -D warnings`: passed.
-- `cargo test --all-targets`: passed, 12 tests total (5 unit, 7 integration), 0 failed.
+- `cargo test --all-targets`: passed, 19 tests total (10 unit, 9 integration), 0 failed.
 
 ## Next concrete work
 

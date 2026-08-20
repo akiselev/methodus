@@ -121,6 +121,7 @@ fn event_location_preserves_bdf_history() {
                 accepted.state.previous_values.as_deref(),
                 Some(previous_values.as_slice())
             );
+            assert_eq!(accepted.state.previous_step, Some(0.1));
             assert!(
                 accepted
                     .events

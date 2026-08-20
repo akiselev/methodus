@@ -15,11 +15,56 @@ pub struct BlockSpec {
 
 /// A block with its resolved position in the global vector.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "BlockData")]
 pub struct Block {
     name: String,
     start: usize,
     length: usize,
     residual_scale: f64,
+}
+
+#[derive(Deserialize)]
+struct BlockData {
+    name: String,
+    start: usize,
+    length: usize,
+    residual_scale: f64,
+}
+
+impl TryFrom<BlockData> for Block {
+    type Error = SolveError;
+
+    fn try_from(data: BlockData) -> Result<Self, Self::Error> {
+        if data.name.trim().is_empty() {
+            return Err(SolveError::InvalidLayout {
+                reason: "block names must not be empty".into(),
+            });
+        }
+        if data.length == 0 {
+            return Err(SolveError::InvalidLayout {
+                reason: format!("block `{}` has zero length", data.name),
+            });
+        }
+        if !data.residual_scale.is_finite() || data.residual_scale <= 0.0 {
+            return Err(SolveError::InvalidLayout {
+                reason: format!(
+                    "block `{}` must have a finite positive residual scale",
+                    data.name
+                ),
+            });
+        }
+        data.start
+            .checked_add(data.length)
+            .ok_or_else(|| SolveError::InvalidLayout {
+                reason: "block range overflows usize".into(),
+            })?;
+        Ok(Self {
+            name: data.name,
+            start: data.start,
+            length: data.length,
+            residual_scale: data.residual_scale,
+        })
+    }
 }
 
 impl Block {
@@ -51,9 +96,44 @@ impl Block {
 
 /// Validated, contiguous partition of a solver vector.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "BlockLayoutData")]
 pub struct BlockLayout {
     blocks: Vec<Block>,
     dimension: usize,
+}
+
+#[derive(Deserialize)]
+struct BlockLayoutData {
+    blocks: Vec<Block>,
+    dimension: usize,
+}
+
+impl TryFrom<BlockLayoutData> for BlockLayout {
+    type Error = SolveError;
+
+    fn try_from(data: BlockLayoutData) -> Result<Self, Self::Error> {
+        let specifications = data
+            .blocks
+            .iter()
+            .map(|block| BlockSpec {
+                name: block.name.clone(),
+                length: block.length,
+                residual_scale: block.residual_scale,
+            })
+            .collect();
+        let layout = Self::new(specifications)?;
+        let starts_match = data
+            .blocks
+            .iter()
+            .zip(&layout.blocks)
+            .all(|(encoded, canonical)| encoded.start == canonical.start);
+        if data.dimension != layout.dimension || !starts_match {
+            return Err(SolveError::InvalidLayout {
+                reason: "serialized block offsets do not match the canonical layout".into(),
+            });
+        }
+        Ok(layout)
+    }
 }
 
 impl BlockLayout {
@@ -181,5 +261,19 @@ mod tests {
         ])
         .unwrap_err();
         assert!(matches!(error, SolveError::InvalidLayout { .. }));
+    }
+
+    #[test]
+    fn deserialization_revalidates_cached_layout_offsets() {
+        let malformed = r#"{
+            "blocks": [{
+                "name": "a",
+                "start": 1,
+                "length": 1,
+                "residual_scale": 1.0
+            }],
+            "dimension": 2
+        }"#;
+        assert!(serde_json::from_str::<BlockLayout>(malformed).is_err());
     }
 }

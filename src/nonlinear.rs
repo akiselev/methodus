@@ -119,7 +119,14 @@ fn solve(
     let initial_norm = scaled_norm(layout, &residual);
     let convergence_threshold =
         config.absolute_tolerance + config.relative_tolerance * initial_norm;
-    let mut trace = Vec::with_capacity(config.max_iterations + 1);
+    let trace_capacity =
+        config
+            .max_iterations
+            .checked_add(1)
+            .ok_or_else(|| SolveError::InvalidConfiguration {
+                reason: "Newton iteration trace capacity overflows usize".into(),
+            })?;
+    let mut trace = Vec::with_capacity(trace_capacity);
 
     for iteration in 0..=config.max_iterations {
         operator.residual(context, &state, &mut residual)?;
@@ -194,6 +201,7 @@ fn validate_config(config: &NewtonConfig) -> Result<(), SolveError> {
         && config.minimum_damping > 0.0
         && config.minimum_damping <= config.initial_damping;
     if config.max_iterations == 0
+        || config.max_iterations.checked_add(1).is_none()
         || config.max_line_search_steps == 0
         || !tolerances_valid
         || !damping_valid
@@ -368,4 +376,21 @@ fn solve_dense(
     }
     NumericError::require_finite("dense solve", &right_hand_side)?;
     Ok(right_hand_side)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configuration_rejects_iteration_count_overflow() {
+        let config = NewtonConfig {
+            max_iterations: usize::MAX,
+            ..NewtonConfig::default()
+        };
+        assert!(matches!(
+            validate_config(&config),
+            Err(SolveError::InvalidConfiguration { .. })
+        ));
+    }
 }

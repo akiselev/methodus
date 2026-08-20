@@ -4,9 +4,24 @@ use crate::{BlockLayout, BlockPreconditioner, EvaluationContext, NumericError, P
 
 /// Elementwise inverse diagonal organized by a validated block layout.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "BlockDiagonalPreconditionerData")]
 pub struct BlockDiagonalPreconditioner {
     layout: BlockLayout,
     inverse_diagonal: Vec<f64>,
+}
+
+#[derive(Deserialize)]
+struct BlockDiagonalPreconditionerData {
+    layout: BlockLayout,
+    inverse_diagonal: Vec<f64>,
+}
+
+impl TryFrom<BlockDiagonalPreconditionerData> for BlockDiagonalPreconditioner {
+    type Error = NumericError;
+
+    fn try_from(data: BlockDiagonalPreconditionerData) -> Result<Self, Self::Error> {
+        Self::new(data.layout, data.inverse_diagonal)
+    }
 }
 
 impl BlockDiagonalPreconditioner {
@@ -65,10 +80,26 @@ pub struct LowerBlock {
 
 /// Forward-substitution preconditioner with elementwise diagonal inverses.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "BlockLowerTriangularPreconditionerData")]
 pub struct BlockLowerTriangularPreconditioner {
     layout: BlockLayout,
     inverse_diagonal: Vec<f64>,
     lower_blocks: Vec<LowerBlock>,
+}
+
+#[derive(Deserialize)]
+struct BlockLowerTriangularPreconditionerData {
+    layout: BlockLayout,
+    inverse_diagonal: Vec<f64>,
+    lower_blocks: Vec<LowerBlock>,
+}
+
+impl TryFrom<BlockLowerTriangularPreconditionerData> for BlockLowerTriangularPreconditioner {
+    type Error = NumericError;
+
+    fn try_from(data: BlockLowerTriangularPreconditionerData) -> Result<Self, Self::Error> {
+        Self::new(data.layout, data.inverse_diagonal, data.lower_blocks)
+    }
 }
 
 impl BlockLowerTriangularPreconditioner {
@@ -91,10 +122,15 @@ impl BlockLowerTriangularPreconditioner {
             }
             let rows = layout.blocks()[block.row_block].length();
             let columns = layout.blocks()[block.column_block].length();
+            let expected_values =
+                rows.checked_mul(columns)
+                    .ok_or_else(|| NumericError::InvalidInput {
+                        message: format!("lower block {index} dimensions overflow usize"),
+                    })?;
             NumericError::require_len(
                 &format!("lower block {index}"),
                 block.values.len(),
-                rows * columns,
+                expected_values,
             )?;
             NumericError::require_finite(&format!("lower block {index}"), &block.values)?;
         }
@@ -208,5 +244,22 @@ mod tests {
             .apply_inverse(&context, &[2.0, 8.0], &mut output)
             .unwrap();
         assert_eq!(output, vec![1.0, 1.5]);
+    }
+
+    #[test]
+    fn deserialization_revalidates_preconditioner_dimensions() {
+        let malformed = r#"{
+            "layout": {
+                "blocks": [{
+                    "name": "a",
+                    "start": 0,
+                    "length": 1,
+                    "residual_scale": 1.0
+                }],
+                "dimension": 1
+            },
+            "inverse_diagonal": []
+        }"#;
+        assert!(serde_json::from_str::<BlockDiagonalPreconditioner>(malformed).is_err());
     }
 }

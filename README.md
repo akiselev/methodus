@@ -10,7 +10,7 @@ The repository contains exactly one Rust package and one public API. There are n
 - `NonlinearOperator` for residuals and Jacobian-vector products.
 - `DaeOperator` for `F(t, y, ydot) = 0`, consistent initialization, and event values.
 - `BlockLayout` plus block-aware operator and preconditioner traits.
-- Canonical `CsrMatrix` storage for small assembled baselines and interchange.
+- Canonical `CsrMatrix` storage with input-order-independent duplicate summation for small assembled baselines and interchange.
 
 All operator outputs are written into caller-provided slices. `EvaluationContext` carries explicit numerical execution policy without importing runtime state.
 
@@ -19,7 +19,7 @@ All operator outputs are written into caller-provided slices. `EvaluationContext
 - Dense correctness-baseline Newton solves with backtracking.
 - Monolithic, block Gauss-Seidel, and block Jacobi coupling policies.
 - Block-diagonal and block-lower-triangular preconditioner actions.
-- BDF1 and BDF2 stepping, adaptive rejection, checkpointable history, consistent initialization, and zero-crossing events.
+- BDF1 and variable-step BDF2 stepping, adaptive rejection, checkpointable step-size history, consistent initialization, and zero-crossing events.
 - Centered-difference verification for nonlinear and DAE Jacobian-vector products.
 
 The dense Newton factorization is deliberately a correctness baseline, not the intended large-system backend. Krylov methods and scalable sparse solvers can be added behind the same operator traits when the form-compiler path requires them.

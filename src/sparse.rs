@@ -4,12 +4,36 @@ use crate::{EvaluationContext, LinearOperator, NumericError};
 
 /// Canonical compressed-sparse-row matrix with sorted, unique columns per row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "CsrMatrixData")]
 pub struct CsrMatrix {
     rows: usize,
     columns: usize,
     row_offsets: Vec<usize>,
     column_indices: Vec<usize>,
     values: Vec<f64>,
+}
+
+#[derive(Deserialize)]
+struct CsrMatrixData {
+    rows: usize,
+    columns: usize,
+    row_offsets: Vec<usize>,
+    column_indices: Vec<usize>,
+    values: Vec<f64>,
+}
+
+impl TryFrom<CsrMatrixData> for CsrMatrix {
+    type Error = NumericError;
+
+    fn try_from(data: CsrMatrixData) -> Result<Self, Self::Error> {
+        Self::new(
+            data.rows,
+            data.columns,
+            data.row_offsets,
+            data.column_indices,
+            data.values,
+        )
+    }
 }
 
 impl CsrMatrix {
@@ -20,10 +44,15 @@ impl CsrMatrix {
         column_indices: Vec<usize>,
         values: Vec<f64>,
     ) -> Result<Self, NumericError> {
-        if row_offsets.len() != rows + 1 {
+        let expected_offsets = rows
+            .checked_add(1)
+            .ok_or_else(|| NumericError::InvalidInput {
+                message: "CSR row count cannot be represented with a terminal offset".into(),
+            })?;
+        if row_offsets.len() != expected_offsets {
             return Err(NumericError::DimensionMismatch {
                 operation: "CSR row offsets".into(),
-                expected: rows + 1,
+                expected: expected_offsets,
                 actual: row_offsets.len(),
             });
         }
@@ -75,6 +104,11 @@ impl CsrMatrix {
         columns: usize,
         mut entries: Vec<(usize, usize, f64)>,
     ) -> Result<Self, NumericError> {
+        let offset_count = rows
+            .checked_add(1)
+            .ok_or_else(|| NumericError::InvalidInput {
+                message: "CSR row count cannot be represented with a terminal offset".into(),
+            })?;
         for (index, (row, column, value)) in entries.iter().copied().enumerate() {
             if row >= rows || column >= columns {
                 return Err(NumericError::InvalidInput {
@@ -88,7 +122,12 @@ impl CsrMatrix {
                 });
             }
         }
-        entries.sort_by_key(|(row, column, _)| (*row, *column));
+        entries.sort_unstable_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.total_cmp(&right.2))
+        });
 
         let mut merged: Vec<(usize, usize, f64)> = Vec::with_capacity(entries.len());
         for (row, column, value) in entries {
@@ -96,24 +135,40 @@ impl CsrMatrix {
                 Some((last_row, last_column, last_value))
                     if *last_row == row && *last_column == column =>
                 {
-                    *last_value += value;
-                    if !last_value.is_finite() {
+                    let sum = *last_value + value;
+                    if !sum.is_finite() {
                         return Err(NumericError::InvalidInput {
                             message: "summing duplicate sparse entries overflowed".into(),
                         });
                     }
+                    *last_value = sum;
                 }
                 _ => merged.push((row, column, value)),
             }
         }
         merged.retain(|(_, _, value)| *value != 0.0);
 
-        let mut row_offsets = vec![0; rows + 1];
+        let mut row_offsets = vec![0usize; offset_count];
         for (row, _, _) in &merged {
-            row_offsets[row + 1] += 1;
+            let next_row = row
+                .checked_add(1)
+                .ok_or_else(|| NumericError::InvalidInput {
+                    message: "CSR row offset index overflowed".into(),
+                })?;
+            row_offsets[next_row] =
+                row_offsets[next_row]
+                    .checked_add(1)
+                    .ok_or_else(|| NumericError::InvalidInput {
+                        message: "CSR row entry count overflowed".into(),
+                    })?;
         }
         for row in 0..rows {
-            row_offsets[row + 1] += row_offsets[row];
+            let next_row = row + 1;
+            row_offsets[next_row] = row_offsets[next_row]
+                .checked_add(row_offsets[row])
+                .ok_or_else(|| NumericError::InvalidInput {
+                    message: "CSR cumulative row offset overflowed".into(),
+                })?;
         }
         let column_indices = merged.iter().map(|(_, column, _)| *column).collect();
         let values = merged.into_iter().map(|(_, _, value)| value).collect();
@@ -185,6 +240,29 @@ mod tests {
         assert_eq!(matrix.row_offsets(), &[0, 1, 2]);
         assert_eq!(matrix.column_indices(), &[1, 0]);
         assert_eq!(matrix.values(), &[3.0, 6.0]);
+    }
+
+    #[test]
+    fn duplicate_summation_is_independent_of_input_order() {
+        let first =
+            CsrMatrix::from_triplets(1, 1, vec![(0, 0, 1.0e16), (0, 0, -1.0e16), (0, 0, 1.0)])
+                .unwrap();
+        let second =
+            CsrMatrix::from_triplets(1, 1, vec![(0, 0, 1.0), (0, 0, 1.0e16), (0, 0, -1.0e16)])
+                .unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn deserialization_revalidates_csr_invariants() {
+        let malformed = r#"{
+            "rows": 1,
+            "columns": 1,
+            "row_offsets": [0, 2],
+            "column_indices": [0, 0],
+            "values": [1.0, 2.0]
+        }"#;
+        assert!(serde_json::from_str::<CsrMatrix>(malformed).is_err());
     }
 
     #[test]
