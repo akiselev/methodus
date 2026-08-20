@@ -1,33 +1,56 @@
 # Solverang status
 
-Updated: 2026-08-16
-Branch: `agent/r13-r20-wave-a-f`
-Milestone: Waves B, E, F / R13, R18-R20
+Updated: 2026-08-20
+Branch: `master`
+Milestone: single-crate numerical core
 
 ## Current role
 
-Solverang owns physics-neutral numerical contracts and algorithms. It must not understand RSL, materials, function spaces, mesh semantics, or field names such as temperature/voltage/displacement/pressure.
+Solverang owns physics-neutral numerical contracts and algorithms. It operates on flat `f64` slices and explicit operator actions. It must not understand `.res`, dimensions or units, fields, materials, function spaces, meshes, element kernels, or product/runtime policy.
 
-## Implemented on this branch
+The repository is one root package named `solverang`. There are no subordinate contracts, scientific, or macro packages.
 
-- R13: generic implicit `DaeOperator` for `F(t,y,ydot)=0`, JVPs, consistent initialization, and event values.
-- R18: block layout/residual/linear/preconditioner contracts.
-- R19: monolithic Newton, block Newton, Gauss-Seidel and Jacobi strategies with per-block scaling, damping/line search, physics-neutral block-diagonal/lower-triangular preconditioners, and per-block residual histories.
-- R19 acceptance includes a common two-block reference problem where monolithic and block Newton agree, plus a strongly coupled case where monolithic convergence is contrasted with deliberately slow staggered convergence.
-- R20: BDF1/BDF2, adaptive error control, JVP-based implicit systems, bit-identical rejected committed state, consistent initialization, located zero-crossing events, and serializable history state.
-- R20 acceptance: BDF1/BDF2 convergence, byte-identical rejected state, checkpoint/restart trajectory identity, and event detection without corrupting BDF history.
-- Verification helper: analytic DAE JVP vs centered finite difference.
+## Implemented surface
 
-## Validation state
+- In-place `LinearOperator`, `Preconditioner`, `NonlinearOperator`, and `DaeOperator` traits.
+- `EvaluationContext` for explicit reproducibility policy.
+- Validated contiguous `BlockLayout` and block-aware operator/preconditioner traits.
+- Canonical sorted `CsrMatrix` with deterministic duplicate summation and matrix-vector action.
+- Dense Newton correctness baseline with backtracking and residual traces.
+- Monolithic, block Gauss-Seidel, and block Jacobi nonlinear strategies.
+- Block-diagonal and block-lower-triangular preconditioners.
+- BDF1/BDF2 implicit stepping with error-based rejection, consistent initialization, serializable history, restart identity, and zero-crossing events.
+- Centered-difference checks for nonlinear and DAE Jacobian-vector products.
 
-Local Rust installation is blocked by sandbox DNS; GitHub-hosted Rust jobs are authoritative. Earlier compile findings in the Wave layer were corrected and rustfmt applied. This user-authored update retriggers full normal CI on the R19 block-history/strategy tests and R20 restart/event tests.
+## Repository cleanup
 
-## Cross-repository contract
+- Removed the historical contracts alias and scientific facade.
+- Removed the Malleus/JIT dependency and solver facade.
+- Removed procedural macros and opcode generation.
+- Removed CAD/sketch/entity/assembly, constraint-graph, pipeline/reduction, optimization, dataflow, benchmark, and bundled test-problem concerns.
+- Removed stale migration, review, and implementation-plan documents. Git history is the archive.
 
-Sinbad consumes numeric vectors, block layouts, residual/JVP callbacks, scaling, preconditioners, and algorithm configuration only. Once normal CI is green, Sinbad must pin this exact revision in Cargo metadata and `scientific-stack.lock`.
+This is an intentional API break. No compatibility types, feature aliases, or forwarding packages remain.
 
-## Remaining before merge
+## Dependency contract
 
-1. Resolve any findings from the complete current CI run.
-2. Pin the final green revision into Sinbad and rerun the federation acceptance suite.
-3. Record final CI evidence and keep this file compact rather than appending history.
+- Krasis implements `NonlinearOperator`, `DaeOperator`, and `BlockNonlinearOperator` for coupled state.
+- Finitum may implement `LinearOperator` for realized discrete operators.
+- Solverang has no dependencies on any scientific-stack repository.
+
+## Validation
+
+Validated locally on 2026-08-20:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --all-targets`: passed.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- `cargo test --all-targets`: passed, 12 tests total (5 unit, 7 integration), 0 failed.
+
+## Next concrete work
+
+1. Add a matrix-free Krylov solver against `LinearOperator` and `Preconditioner` when Finitum supplies the first realized operator.
+2. Exercise Krasis coupled-state implementations against the block and DAE acceptance tests.
+3. Replace the dense Newton baseline only after representative form-compiler systems define scaling and performance requirements.
+
+Blockers: none.

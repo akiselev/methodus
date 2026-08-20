@@ -1,11 +1,18 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/contracts",
-    "crates/solverang",
-    "crates/macros",
-    "crates/scientific",
-]
+[package]
+name = "solverang"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Physics-neutral numerical operator contracts and algorithms"
+repository = "https://github.com/akiselev/solverang"
+readme = "README.md"
+keywords = ["solver", "nonlinear", "dae", "numerical"]
+categories = ["mathematics", "science", "algorithms"]
 
-[workspace.package]
-edition = "2021"
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = "1"
