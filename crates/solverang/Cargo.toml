@@ -38,7 +38,7 @@ solverang_macros = { version = "0.1.0", path = "../macros", optional = true }
 # Malleus is the standalone execution compiler. Pin the coordinated R9 commit so Solverang's
 # historical `crate::jit` facade is backed by the real public crate, not a copied compatibility
 # implementation.
-malleus = { git = "https://github.com/akiselev/malleus", rev = "55c1691bef45bd0cc9dd1b04f9db943b73808103", optional = true }
+malleus = { git = "https://github.com/akiselev/malleus", optional = true }
 
 [dev-dependencies]
 proptest = "1.4"
