@@ -54,8 +54,10 @@ Validated locally on 2026-08-21:
 
 ## Next concrete work
 
-1. Exercise Krasis coupled-state implementations against the block and DAE acceptance tests.
-2. Add additional Krylov methods only when representative realized systems require them.
-3. Replace the dense Newton baseline only after representative form-compiler systems define scaling and performance requirements.
+Krasis now exercises the nonlinear, block, and DAE contracts with generated Finitum actions in
+the FC7 transient-diffusion and nonlinear-heat acceptance gates, including rejection and restart.
+
+1. Add additional Krylov methods only when representative realized systems require them.
+2. Replace the dense Newton baseline only after representative form-compiler systems define scaling and performance requirements.
 
 Blockers: none.
