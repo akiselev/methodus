@@ -57,4 +57,6 @@ pub enum SolveError {
     LineSearchFailed,
     #[error("nonlinear solve did not converge")]
     NotConverged,
+    #[error("conjugate-gradient iteration {iteration} encountered a non-positive search curvature")]
+    KrylovBreakdown { iteration: usize },
 }

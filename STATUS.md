@@ -1,8 +1,8 @@
 # Solverang status
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 Branch: `master`
-Milestone: single-crate numerical core
+Milestone: FC6 linear operator solve
 
 ## Current role
 
@@ -16,6 +16,9 @@ The repository is one root package named `solverang`. There are no subordinate c
 - `EvaluationContext` for explicit reproducibility policy.
 - Validated contiguous `BlockLayout` and block-aware operator/preconditioner traits.
 - Canonical sorted `CsrMatrix` with input-order-independent duplicate summation and matrix-vector action.
+- Deterministic preconditioned conjugate gradient over `LinearOperator` and `Preconditioner`, with
+  residual traces, dimension/configuration validation, finite-value checks, and non-positive
+  curvature refusal.
 - Invariant-validated deserialization for CSR matrices, block layouts, preconditioners, and BDF history.
 - Dense Newton correctness baseline with backtracking and residual traces.
 - Monolithic, block Gauss-Seidel, and block Jacobi nonlinear strategies.
@@ -42,17 +45,17 @@ This is an intentional API break. No compatibility types, feature aliases, or fo
 
 ## Validation
 
-Validated locally on 2026-08-20:
+Validated locally on 2026-08-21:
 
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --all-targets`: passed.
 - `cargo clippy --all-targets -- -D warnings`: passed.
-- `cargo test --all-targets`: passed, 19 tests total (10 unit, 9 integration), 0 failed.
+- `cargo test --all-targets`: passed, 21 tests total (12 unit, 9 integration), 0 failed.
 
 ## Next concrete work
 
-1. Add a matrix-free Krylov solver against `LinearOperator` and `Preconditioner` when Finitum supplies the first realized operator.
-2. Exercise Krasis coupled-state implementations against the block and DAE acceptance tests.
+1. Exercise Krasis coupled-state implementations against the block and DAE acceptance tests.
+2. Add additional Krylov methods only when representative realized systems require them.
 3. Replace the dense Newton baseline only after representative form-compiler systems define scaling and performance requirements.
 
 Blockers: none.

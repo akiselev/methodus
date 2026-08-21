@@ -22,7 +22,7 @@ All operator outputs are written into caller-provided slices. `EvaluationContext
 - BDF1 and variable-step BDF2 stepping, adaptive rejection, checkpointable step-size history, consistent initialization, and zero-crossing events.
 - Centered-difference verification for nonlinear and DAE Jacobian-vector products.
 
-The dense Newton factorization is deliberately a correctness baseline, not the intended large-system backend. Krylov methods and scalable sparse solvers can be added behind the same operator traits when the form-compiler path requires them.
+The dense Newton factorization is deliberately a correctness baseline, not the intended large-system backend. A deterministic preconditioned conjugate-gradient reference solver now consumes `LinearOperator` actions for the first Finitum realization; additional Krylov methods and scalable sparse solvers can be added behind the same contracts as concrete systems require them.
 
 ## Example
 

@@ -9,6 +9,7 @@ mod bdf;
 mod block;
 mod context;
 mod error;
+mod linear;
 mod nonlinear;
 mod operator;
 mod preconditioner;
@@ -22,6 +23,9 @@ pub use block::{
 };
 pub use context::EvaluationContext;
 pub use error::{NumericError, SolveError};
+pub use linear::{
+    ConjugateGradientConfig, LinearIteration, LinearSolveReport, solve_conjugate_gradient,
+};
 pub use nonlinear::{
     BlockStrategy, IterationTrace, NewtonConfig, SolveReport, solve_blocks, solve_newton,
 };
