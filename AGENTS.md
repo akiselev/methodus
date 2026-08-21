@@ -10,4 +10,7 @@ Read `STATUS.md` before substantial work and update it before every handoff or p
 - Record current milestone, implemented numerical contracts/algorithms, exact validation results, blockers, dependency constraints, and next concrete work.
 - Never say a solver or contract is verified unless the corresponding tests actually ran.
 - Move historical detail to Git history, PRs, ADRs, or dedicated design documents.
-- Keep Solverang physics-neutral: no RSL, materials, function-space, field-name, or physics-specific branching belongs here.
+- Keep Methodus consumer-neutral: no constraint vocabulary, RSL, materials,
+  function-space, field-name, geometry, CAD, or physics-specific branching
+  belongs here. Solverang may depend on Methodus; Methodus must not depend on
+  Solverang.

@@ -339,7 +339,7 @@ fn l2(values: &[f64]) -> f64 {
     values.iter().map(|value| value * value).sum::<f64>().sqrt()
 }
 
-fn solve_dense(
+pub(crate) fn solve_dense(
     mut matrix: Vec<Vec<f64>>,
     mut right_hand_side: Vec<f64>,
 ) -> Result<Vec<f64>, SolveError> {

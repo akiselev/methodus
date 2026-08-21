@@ -1,6 +1,6 @@
 //! Physics-neutral numerical contracts and algorithms.
 //!
-//! Solverang consumes vectors and operator actions. It does not own meshes,
+//! Methodus consumes vectors and operator actions. It does not own meshes,
 //! fields, units, constitutive laws, compiled kernels, or simulation state.
 
 #![forbid(unsafe_code)]
@@ -9,6 +9,7 @@ mod bdf;
 mod block;
 mod context;
 mod error;
+mod least_squares;
 mod linear;
 mod nonlinear;
 mod operator;
@@ -23,6 +24,10 @@ pub use block::{
 };
 pub use context::EvaluationContext;
 pub use error::{NumericError, SolveError};
+pub use least_squares::{
+    LeastSquaresConfig, LeastSquaresIteration, LeastSquaresOperator, LeastSquaresReport,
+    solve_least_squares, verify_least_squares_jacobian,
+};
 pub use linear::{
     ConjugateGradientConfig, ConjugateGradientSymmetryPolicy, LinearIteration, LinearSolveReport,
     solve_conjugate_gradient,

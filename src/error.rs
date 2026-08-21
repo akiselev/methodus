@@ -42,7 +42,7 @@ impl NumericError {
     }
 }
 
-/// Failure reported by a Solverang algorithm.
+/// Failure reported by a Methodus algorithm.
 #[derive(Clone, Debug, PartialEq, Error)]
 pub enum SolveError {
     #[error(transparent)]

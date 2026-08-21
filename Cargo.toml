@@ -1,11 +1,11 @@
 [package]
-name = "solverang"
+name = "methodus"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 description = "Physics-neutral numerical operator contracts and algorithms"
-repository = "https://github.com/akiselev/solverang"
+repository = "https://github.com/akiselev/methodus"
 readme = "README.md"
 keywords = ["solver", "nonlinear", "dae", "numerical"]
 categories = ["mathematics", "science", "algorithms"]

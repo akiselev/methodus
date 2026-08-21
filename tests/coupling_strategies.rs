@@ -1,4 +1,4 @@
-use solverang::{
+use methodus::{
     BlockLayout, BlockNonlinearOperator, BlockSpec, BlockStrategy, EvaluationContext, NewtonConfig,
     NonlinearOperator, NumericError, solve_blocks,
 };

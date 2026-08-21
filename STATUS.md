@@ -1,14 +1,17 @@
-# Solverang status
+# Methodus status
 
 Updated: 2026-08-21
 Branch: `master`
-Milestone: FC6 linear operator solve
+Milestone: numerical-core extraction from Solverang
 
 ## Current role
 
-Solverang owns physics-neutral numerical contracts and algorithms. It operates on flat `f64` slices and explicit operator actions. It must not understand `.res`, dimensions or units, fields, materials, function spaces, meshes, element kernels, or product/runtime policy.
+Methodus owns consumer-neutral numerical contracts and algorithms. It operates
+on flat `f64` slices and explicit operator actions. It must not understand
+constraints, `.res`, dimensions or units, fields, materials, geometry,
+function spaces, meshes, element kernels, or product/runtime policy.
 
-The repository is one root package named `solverang`. There are no subordinate contracts, scientific, or macro packages.
+The repository is one root package named `methodus`. There are no subordinate contracts, scientific, or macro packages.
 
 ## Implemented surface
 
@@ -23,19 +26,22 @@ The repository is one root package named `solverang`. There are no subordinate c
   symmetry or an explicit caller assumption for unknown actions.
 - Invariant-validated deserialization for CSR matrices, block layouts, preconditioners, and BDF history.
 - Dense Newton correctness baseline with backtracking and residual traces.
+- Rectangular `LeastSquaresOperator`, deterministic damped Gauss-Newton solve,
+  and centered-difference full-Jacobian verification.
 - Monolithic, block Gauss-Seidel, and block Jacobi nonlinear strategies.
 - Block-diagonal and block-lower-triangular preconditioners.
 - BDF1 and variable-step BDF2 implicit stepping with error-based rejection, consistent initialization, serializable step-size history, restart identity, and zero-crossing events.
 - Checked dimension, capacity, time, and accepted-step arithmetic on fallible solver paths.
 - Centered-difference checks for nonlinear and DAE Jacobian-vector products.
 
-## Repository cleanup
+## Extraction
 
-- Removed the historical contracts alias and scientific facade.
-- Removed the Malleus/JIT dependency and solver facade.
-- Removed procedural macros and opcode generation.
-- Removed CAD/sketch/entity/assembly, constraint-graph, pipeline/reduction, optimization, dataflow, benchmark, and bundled test-problem concerns.
-- Removed stale migration, review, and implementation-plan documents. Git history is the archive.
+- Created from Solverang history at numerical-core head `2bf2ee5` and renamed
+  directly, without a forwarding package or compatibility facade.
+- Solverang retains its history and now consumes Methodus while owning the
+  generalized constraint engine and 2-D/3-D geometry vocabularies.
+- Historical mixed CAD/scientific/JIT/pipeline code remains available in Git
+  history but was not restored into Methodus.
 
 This is an intentional API break. No compatibility types, feature aliases, or forwarding packages remain.
 
@@ -43,23 +49,25 @@ This is an intentional API break. No compatibility types, feature aliases, or fo
 
 - Krasis implements `NonlinearOperator`, `DaeOperator`, and `BlockNonlinearOperator` for coupled state.
 - Finitum may implement `LinearOperator` for realized discrete operators.
-- Solverang has no dependencies on any scientific-stack repository.
+- Solverang implements `LeastSquaresOperator` for its constraint graph.
+- Methodus has no dependencies on any scientific-stack repository.
 
 ## Validation
 
 Validated locally on 2026-08-21:
 
-- `cargo fmt --all -- --check`: passed.
-- `cargo check --all-targets`: passed.
-- `cargo clippy --all-targets -- -D warnings`: passed.
-- `cargo test --all-targets`: passed, 23 tests total (14 unit, 9 integration), 0 failed.
+- formatting and locked all-target checks passed;
+- warnings-denied Clippy passed;
+- 24 tests passed (15 unit, 9 integration), 0 failed;
+- warnings-denied rustdoc and doctests passed;
+- `git diff --check` passed.
 
 ## Next concrete work
 
-Krasis now exercises the nonlinear, block, and DAE contracts with generated Finitum actions in
-the FC7 transient-diffusion and nonlinear-heat acceptance gates, including rejection and restart.
-
 1. Add additional Krylov methods only when representative realized systems require them.
-2. Replace the dense Newton baseline only after representative form-compiler systems define scaling and performance requirements.
+2. Promote the dense least-squares baseline only from representative Solverang
+   constraint systems and independent numerical checks.
+3. Replace dense Newton only after representative compiled systems define
+   scaling and performance requirements.
 
 Blockers: none.
