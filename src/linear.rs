@@ -1,6 +1,19 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{EvaluationContext, LinearOperator, NumericError, Preconditioner, SolveError};
+use crate::{
+    EvaluationContext, LinearOperator, NumericError, OperatorSymmetry, Preconditioner, SolveError,
+};
+
+/// How conjugate gradient handles an operator whose symmetry is not declared.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConjugateGradientSymmetryPolicy {
+    /// Refuse an operator without an affirmative symmetry declaration.
+    #[default]
+    RequireDeclared,
+    /// Record an explicit caller assertion that an otherwise-unknown operator is symmetric.
+    AssumeSymmetric,
+}
 
 /// Convergence policy for a conjugate-gradient solve.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -8,6 +21,8 @@ pub struct ConjugateGradientConfig {
     pub max_iterations: usize,
     pub absolute_tolerance: f64,
     pub relative_tolerance: f64,
+    #[serde(default)]
+    pub symmetry_policy: ConjugateGradientSymmetryPolicy,
 }
 
 impl Default for ConjugateGradientConfig {
@@ -16,6 +31,7 @@ impl Default for ConjugateGradientConfig {
             max_iterations: 1_000,
             absolute_tolerance: 1.0e-12,
             relative_tolerance: 1.0e-10,
+            symmetry_policy: ConjugateGradientSymmetryPolicy::RequireDeclared,
         }
     }
 }
@@ -56,6 +72,23 @@ pub fn solve_conjugate_gradient(
                 operator.columns()
             ),
         });
+    }
+    match operator.symmetry() {
+        OperatorSymmetry::Nonsymmetric => {
+            return Err(SolveError::InvalidConfiguration {
+                reason: "conjugate gradient refuses an operator declared nonsymmetric".into(),
+            });
+        }
+        OperatorSymmetry::Unknown
+            if config.symmetry_policy == ConjugateGradientSymmetryPolicy::RequireDeclared =>
+        {
+            return Err(SolveError::InvalidConfiguration {
+                reason:
+                    "conjugate gradient requires declared symmetry or an explicit caller assumption"
+                        .into(),
+            });
+        }
+        OperatorSymmetry::Unknown | OperatorSymmetry::Symmetric => {}
     }
     NumericError::require_len("linear right-hand side", right_hand_side.len(), dimension)?;
     NumericError::require_len("initial linear solution", initial_solution.len(), dimension)?;
@@ -201,6 +234,28 @@ mod tests {
 
     struct DiagonalInverse(Vec<f64>);
 
+    struct UnknownIdentity;
+
+    impl LinearOperator for UnknownIdentity {
+        fn rows(&self) -> usize {
+            1
+        }
+
+        fn columns(&self) -> usize {
+            1
+        }
+
+        fn apply(
+            &self,
+            _context: &EvaluationContext,
+            input: &[f64],
+            output: &mut [f64],
+        ) -> Result<(), NumericError> {
+            output.copy_from_slice(input);
+            Ok(())
+        }
+    }
+
     impl Preconditioner for DiagonalInverse {
         fn dimension(&self) -> usize {
             self.0.len()
@@ -265,5 +320,52 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
+    }
+
+    #[test]
+    fn conjugate_gradient_refuses_declared_nonsymmetric_operators() {
+        let matrix =
+            CsrMatrix::from_triplets(2, 2, vec![(0, 0, 2.0), (0, 1, 1.0), (1, 1, 2.0)]).unwrap();
+        assert_eq!(matrix.symmetry(), OperatorSymmetry::Nonsymmetric);
+        let error = solve_conjugate_gradient(
+            &matrix,
+            None,
+            &EvaluationContext::default(),
+            &[1.0, 1.0],
+            &[0.0; 2],
+            &ConjugateGradientConfig::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
+    }
+
+    #[test]
+    fn conjugate_gradient_requires_an_explicit_unknown_symmetry_assumption() {
+        let error = solve_conjugate_gradient(
+            &UnknownIdentity,
+            None,
+            &EvaluationContext::default(),
+            &[2.0],
+            &[0.0],
+            &ConjugateGradientConfig::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
+
+        let config = ConjugateGradientConfig {
+            symmetry_policy: ConjugateGradientSymmetryPolicy::AssumeSymmetric,
+            ..ConjugateGradientConfig::default()
+        };
+        let report = solve_conjugate_gradient(
+            &UnknownIdentity,
+            None,
+            &EvaluationContext::default(),
+            &[2.0],
+            &[0.0],
+            &config,
+        )
+        .unwrap();
+        assert!(report.converged);
+        assert_eq!(report.solution, [2.0]);
     }
 }

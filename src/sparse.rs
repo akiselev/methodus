@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{EvaluationContext, LinearOperator, NumericError};
+use crate::{EvaluationContext, LinearOperator, NumericError, OperatorSymmetry};
 
 /// Canonical compressed-sparse-row matrix with sorted, unique columns per row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -208,6 +208,29 @@ impl LinearOperator for CsrMatrix {
 
     fn columns(&self) -> usize {
         self.columns
+    }
+
+    fn symmetry(&self) -> OperatorSymmetry {
+        if self.rows != self.columns {
+            return OperatorSymmetry::Nonsymmetric;
+        }
+        for row in 0..self.rows {
+            for entry in self.row_offsets[row]..self.row_offsets[row + 1] {
+                let column = self.column_indices[entry];
+                let value = self.values[entry];
+                if value == 0.0 {
+                    continue;
+                }
+                let transpose = self.row_offsets[column]..self.row_offsets[column + 1];
+                let Ok(offset) = self.column_indices[transpose.clone()].binary_search(&row) else {
+                    return OperatorSymmetry::Nonsymmetric;
+                };
+                if self.values[transpose.start + offset] != value {
+                    return OperatorSymmetry::Nonsymmetric;
+                }
+            }
+        }
+        OperatorSymmetry::Symmetric
     }
 
     fn apply(

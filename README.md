@@ -6,7 +6,8 @@ The repository contains exactly one Rust package and one public API. There are n
 
 ## Owned interfaces
 
-- `LinearOperator` and `Preconditioner` for matrix-free linear actions.
+- `LinearOperator` and `Preconditioner` for matrix-free linear actions, with explicit
+  symmetric/nonsymmetric/unknown metadata.
 - `NonlinearOperator` for residuals and Jacobian-vector products.
 - `DaeOperator` for `F(t, y, ydot) = 0`, consistent initialization, and event values.
 - `BlockLayout` plus block-aware operator and preconditioner traits.
@@ -22,7 +23,7 @@ All operator outputs are written into caller-provided slices. `EvaluationContext
 - BDF1 and variable-step BDF2 stepping, adaptive rejection, checkpointable step-size history, consistent initialization, and zero-crossing events.
 - Centered-difference verification for nonlinear and DAE Jacobian-vector products.
 
-The dense Newton factorization is deliberately a correctness baseline, not the intended large-system backend. A deterministic preconditioned conjugate-gradient reference solver now consumes `LinearOperator` actions for the first Finitum realization; additional Krylov methods and scalable sparse solvers can be added behind the same contracts as concrete systems require them.
+The dense Newton factorization is deliberately a correctness baseline, not the intended large-system backend. A deterministic preconditioned conjugate-gradient reference solver consumes `LinearOperator` actions for the first Finitum realization. It refuses declared-nonsymmetric actions and requires an explicit caller assumption when symmetry is unknown. Additional Krylov methods and scalable sparse solvers can be added behind the same contracts as concrete systems require them.
 
 ## Example
 

@@ -24,13 +24,15 @@ pub use block::{
 pub use context::EvaluationContext;
 pub use error::{NumericError, SolveError};
 pub use linear::{
-    ConjugateGradientConfig, LinearIteration, LinearSolveReport, solve_conjugate_gradient,
+    ConjugateGradientConfig, ConjugateGradientSymmetryPolicy, LinearIteration, LinearSolveReport,
+    solve_conjugate_gradient,
 };
 pub use nonlinear::{
     BlockStrategy, IterationTrace, NewtonConfig, SolveReport, solve_blocks, solve_newton,
 };
 pub use operator::{
-    DaeOperator, LinearOperator, NonlinearOperator, Preconditioner, verify_dae_jvp, verify_jvp,
+    DaeOperator, LinearOperator, NonlinearOperator, OperatorSymmetry, Preconditioner,
+    verify_dae_jvp, verify_jvp,
 };
 pub use preconditioner::{
     BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, LowerBlock,

@@ -1,9 +1,28 @@
 use crate::{EvaluationContext, NumericError};
 
+/// Declared symmetry of a real linear operator action.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OperatorSymmetry {
+    /// The implementation does not carry enough evidence to make a symmetry claim.
+    #[default]
+    Unknown,
+    /// The action is known to be symmetric under the Euclidean inner product.
+    Symmetric,
+    /// The action is known not to be symmetric.
+    Nonsymmetric,
+}
+
 /// Matrix-free action of a rectangular linear operator.
 pub trait LinearOperator: Send + Sync {
     fn rows(&self) -> usize;
     fn columns(&self) -> usize;
+    /// Report symmetry evidence for algorithms whose validity depends on it.
+    ///
+    /// Implementations must return [`OperatorSymmetry::Nonsymmetric`] when their construction is
+    /// known to destroy symmetry. The default makes no claim.
+    fn symmetry(&self) -> OperatorSymmetry {
+        OperatorSymmetry::Unknown
+    }
     fn apply(
         &self,
         context: &EvaluationContext,
