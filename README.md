@@ -29,6 +29,16 @@ All operator outputs are written into caller-provided slices. `EvaluationContext
 - Block-diagonal and block-lower-triangular preconditioner actions.
 - BDF1 and variable-step BDF2 stepping, adaptive rejection, checkpointable step-size history, consistent initialization, and zero-crossing events.
 - Centered-difference verification for nonlinear and DAE Jacobian-vector products.
+- Consumer-neutral verification utilities for directional Taylor remainders,
+  centered differences, callback-based complex-step checks, fitted convergence
+  order, trajectory error norms, solve-strategy agreement, and deterministic
+  work budgets.
+
+Verification thresholds remain caller policy. Methodus validates numerical
+inputs and returns measurements (or an explicit comparison/budget decision);
+it does not assign scientific meaning or promote support claims. Complex-step
+callbacks provide the imaginary response so consumers may use their own
+complex or dual scalar representation without adding one to Methodus.
 
 The dense Newton factorization is deliberately a correctness baseline, not the intended large-system backend. A deterministic preconditioned conjugate-gradient reference solver consumes `LinearOperator` actions for the first Finitum realization. It refuses declared-nonsymmetric actions and requires an explicit caller assumption when symmetry is unknown. Additional Krylov methods and scalable sparse solvers can be added behind the same contracts as concrete systems require them.
 

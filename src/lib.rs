@@ -15,6 +15,7 @@ mod nonlinear;
 mod operator;
 mod preconditioner;
 mod sparse;
+mod verification;
 
 pub use bdf::{
     AcceptedStep, BdfConfig, BdfOrder, BdfState, LocatedEvent, RejectedStep, StepOutcome, bdf_step,
@@ -43,3 +44,9 @@ pub use preconditioner::{
     BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, LowerBlock,
 };
 pub use sparse::CsrMatrix;
+pub use verification::{
+    ComparisonReport, ComparisonTolerance, ConvergenceOrderReport, ConvergenceSample,
+    DerivativeCheckReport, DerivativeSample, TrajectoryNormReport, WorkBudget, WorkBudgetReport,
+    WorkCount, check_centered_difference, check_complex_step, check_solve_strategy_agreement,
+    check_taylor_remainder, check_work_budget, estimate_convergence_order, trajectory_error_norms,
+};

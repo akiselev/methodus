@@ -2,7 +2,7 @@
 
 Updated: 2026-08-21
 Branch: `master`
-Milestone: numerical-core extraction from Solverang
+Milestone: SV0-B1 reusable numerical verification checkers
 
 ## Current role
 
@@ -33,6 +33,15 @@ The repository is one root package named `methodus`. There are no subordinate co
 - BDF1 and variable-step BDF2 implicit stepping with error-based rejection, consistent initialization, serializable step-size history, restart identity, and zero-crossing events.
 - Checked dimension, capacity, time, and accepted-step arithmetic on fallible solver paths.
 - Centered-difference checks for nonlinear and DAE Jacobian-vector products.
+- Reusable directional Taylor-remainder, centered-difference, and callback-based
+  complex-step reports over caller-supplied numerical evaluations.
+- Convergence-order estimation from strictly refined positive samples, with
+  adjacent orders and a log-space least-squares fit.
+- Common-grid trajectory max/trapezoidal-L2 norms, tolerance-based
+  solve-strategy agreement, and deterministic per-category work-budget checks.
+- Malformed dimensions, non-monotone sample sequences, invalid tolerances,
+  non-finite values, and floating-point overflow in computed discrepancies are
+  refused rather than converted into passing evidence.
 
 ## Extraction
 
@@ -58,16 +67,18 @@ Validated locally on 2026-08-21:
 
 - formatting and locked all-target checks passed;
 - warnings-denied Clippy passed;
-- 24 tests passed (15 unit, 9 integration), 0 failed;
+- 29 tests passed (20 unit, 9 integration), 0 failed;
 - warnings-denied rustdoc and doctests passed;
 - `git diff --check` passed.
 
 ## Next concrete work
 
-1. Add additional Krylov methods only when representative realized systems require them.
-2. Promote the dense least-squares baseline only from representative Solverang
+1. Integrate these checkers through Finitum/Krasis and Sinbad SV0-B3/B4/B5
+   without moving campaign policy into Methodus.
+2. Add additional Krylov methods only when representative realized systems require them.
+3. Promote the dense least-squares baseline only from representative Solverang
    constraint systems and independent numerical checks.
-3. Replace dense Newton only after representative compiled systems define
+4. Replace dense Newton only after representative compiled systems define
    scaling and performance requirements.
 
 Blockers: none.
