@@ -15,6 +15,7 @@ mod nonlinear;
 mod operator;
 mod preconditioner;
 mod sparse;
+mod transpose;
 mod verification;
 
 pub use bdf::{
@@ -44,6 +45,7 @@ pub use preconditioner::{
     BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, LowerBlock,
 };
 pub use sparse::CsrMatrix;
+pub use transpose::{TransposeOperator, transpose_view, verify_adjoint_identity};
 pub use verification::{
     ComparisonReport, ComparisonTolerance, ConvergenceOrderReport, ConvergenceSample,
     DerivativeCheckReport, DerivativeSample, TrajectoryNormReport, WorkBudget, WorkBudgetReport,

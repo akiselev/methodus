@@ -1,8 +1,19 @@
 # Methodus status
 
-Updated: 2026-08-21
+Updated: 2026-08-22
 Branch: `master`
-Milestone: SV0-B1 reusable numerical verification checkers
+Milestone: SV0-B1 checkers + SV1-C5/D1 transpose and adjoint contracts
+
+## SV1-C5/D1 transpose and adjoint slice
+
+`TransposeOperator` adapts symmetric-declared linear operators into their
+algebraic transpose by exact delegation (A = Aᵀ under the admitted
+declaration); nonsymmetric or evidence-free declarations are refused because
+the matrix-free contract cannot compute genuine transposes without column
+access. `verify_adjoint_identity` checks <Au,v> == <u,transpose v> on caller
+probes; `transpose_view` is the entry point adjoint solves compose with.
+Two acceptance tests: delegation equality plus identity satisfaction, and
+refusal of Nonsymmetric/Unknown declarations plus dimension-mismatch probes.
 
 ## Current role
 
