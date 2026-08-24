@@ -74,18 +74,18 @@ This is an intentional API break. No compatibility types, feature aliases, or fo
 
 ## Validation
 
-Validated locally on 2026-08-21:
+Validated locally on 2026-08-24:
 
 - formatting and locked all-target checks passed;
 - warnings-denied Clippy passed;
-- 29 tests passed (20 unit, 9 integration), 0 failed;
+- 31 tests passed (20 unit, 11 integration), 0 failed;
 - warnings-denied rustdoc and doctests passed;
 - `git diff --check` passed.
 
 ## Next concrete work
 
-1. Integrate these checkers through Finitum/Krasis and Sinbad SV0-B3/B4/B5
-   without moving campaign policy into Methodus.
+1. Integrate the landed transpose/adjoint contracts into the next bounded
+   Sinbad derivative campaign without moving campaign policy into Methodus.
 2. Add additional Krylov methods only when representative realized systems require them.
 3. Promote the dense least-squares baseline only from representative Solverang
    constraint systems and independent numerical checks.
