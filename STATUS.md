@@ -1,6 +1,6 @@
 # Methodus status
 
-Updated: 2026-08-22
+Updated: 2026-08-30
 Branch: `master`
 Milestone: SV0-B1 checkers + SV1-C5/D1 transpose and adjoint contracts
 
@@ -82,11 +82,28 @@ Validated locally on 2026-08-24:
 - warnings-denied rustdoc and doctests passed;
 - `git diff --check` passed.
 
+## Known limits recorded by the 2026-08-30 workspace audit (tree `f5d135f`)
+
+- Operator property metadata is the three-valued `OperatorSymmetry` only; no
+  definiteness, nullspace, saddle-point, or block-structure vocabulary exists,
+  so a consumer cannot select an algorithm from declared properties.
+- Preconditioned conjugate gradient is the only Krylov method; the transpose
+  contract accepts only `Symmetric` operators, which Finitum's matrix-free
+  operator never declares, so `transpose_view` is unusable on the current
+  realization path.
+
 ## Next concrete work
 
-1. Integrate the landed transpose/adjoint contracts into the next bounded
+1. `GX-D2` (see `sinbad/docs/simulation-vision/GX-GENERIC-EXECUTION-PLANE.md`):
+   `OperatorProperties` (symmetry, definiteness, nullspace dimension, saddle
+   structure) replacing the three-valued enum, and `TransposeOperator` over
+   assembled nonsymmetric operators; this is SV2-A4. Selection policy stays
+   in Sinbad.
+2. Integrate the landed transpose/adjoint contracts into the next bounded
    Sinbad derivative campaign without moving campaign policy into Methodus.
-2. Add additional Krylov methods only when representative realized systems require them.
+3. Add MINRES/GMRES and block preconditioner contracts (SV2-B6) when the
+   Stokes realization through GX requires them; no other Krylov breadth before
+   a representative realized system demands it.
 3. Promote the dense least-squares baseline only from representative Solverang
    constraint systems and independent numerical checks.
 4. Replace dense Newton only after representative compiled systems define
