@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    EvaluationContext, LinearOperator, NumericError, OperatorSymmetry, Preconditioner, SolveError,
+    Definiteness, EvaluationContext, LinearOperator, NumericError, OperatorSymmetry,
+    Preconditioner, SolveError,
 };
 
 /// How conjugate gradient handles an operator whose symmetry is not declared.
@@ -89,6 +90,23 @@ pub fn solve_conjugate_gradient(
             });
         }
         OperatorSymmetry::Unknown | OperatorSymmetry::Symmetric => {}
+    }
+    let properties = operator.properties();
+    if properties.definiteness() == Definiteness::Indefinite {
+        return Err(SolveError::InvalidConfiguration {
+            reason: "conjugate gradient refuses an operator declared Indefinite; no projection \
+                     or deflation is supplied"
+                .into(),
+        });
+    }
+    if matches!(properties.nullspace_dimension(), Some(dimension) if dimension > 0) {
+        return Err(SolveError::InvalidConfiguration {
+            reason: format!(
+                "conjugate gradient refuses an operator with a declared nullspace dimension of \
+                 {:?}; no projection or deflation is supplied",
+                properties.nullspace_dimension()
+            ),
+        });
     }
     NumericError::require_len("linear right-hand side", right_hand_side.len(), dimension)?;
     NumericError::require_len("initial linear solution", initial_solution.len(), dimension)?;
@@ -234,6 +252,41 @@ mod tests {
 
     struct DiagonalInverse(Vec<f64>);
 
+    /// A declared-symmetric identity operator carrying additional
+    /// [`crate::OperatorProperties`] metadata, used to exercise the
+    /// definiteness/nullspace refusal paths independent of the symmetry check.
+    struct SymmetricWithProperties {
+        properties: crate::OperatorProperties,
+    }
+
+    impl LinearOperator for SymmetricWithProperties {
+        fn rows(&self) -> usize {
+            2
+        }
+
+        fn columns(&self) -> usize {
+            2
+        }
+
+        fn symmetry(&self) -> OperatorSymmetry {
+            OperatorSymmetry::Symmetric
+        }
+
+        fn properties(&self) -> crate::OperatorProperties {
+            self.properties.clone()
+        }
+
+        fn apply(
+            &self,
+            _context: &EvaluationContext,
+            input: &[f64],
+            output: &mut [f64],
+        ) -> Result<(), NumericError> {
+            output.copy_from_slice(input);
+            Ok(())
+        }
+    }
+
     struct UnknownIdentity;
 
     impl LinearOperator for UnknownIdentity {
@@ -367,5 +420,75 @@ mod tests {
         .unwrap();
         assert!(report.converged);
         assert_eq!(report.solution, [2.0]);
+    }
+
+    #[test]
+    fn conjugate_gradient_refuses_declared_indefinite_operators() {
+        let operator = SymmetricWithProperties {
+            properties: crate::OperatorProperties::new(
+                OperatorSymmetry::Symmetric,
+                Definiteness::Indefinite,
+                None,
+                crate::OperatorStructureHint::Dense,
+            )
+            .unwrap(),
+        };
+        let error = solve_conjugate_gradient(
+            &operator,
+            None,
+            &EvaluationContext::default(),
+            &[1.0, 1.0],
+            &[0.0; 2],
+            &ConjugateGradientConfig::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
+    }
+
+    #[test]
+    fn conjugate_gradient_refuses_a_declared_positive_nullspace_dimension() {
+        let operator = SymmetricWithProperties {
+            properties: crate::OperatorProperties::new(
+                OperatorSymmetry::Symmetric,
+                Definiteness::PositiveSemidefinite,
+                Some(1),
+                crate::OperatorStructureHint::Dense,
+            )
+            .unwrap(),
+        };
+        let error = solve_conjugate_gradient(
+            &operator,
+            None,
+            &EvaluationContext::default(),
+            &[1.0, 1.0],
+            &[0.0; 2],
+            &ConjugateGradientConfig::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
+    }
+
+    #[test]
+    fn conjugate_gradient_accepts_a_declared_zero_nullspace_dimension() {
+        let operator = SymmetricWithProperties {
+            properties: crate::OperatorProperties::new(
+                OperatorSymmetry::Symmetric,
+                Definiteness::PositiveDefinite,
+                Some(0),
+                crate::OperatorStructureHint::Dense,
+            )
+            .unwrap(),
+        };
+        let report = solve_conjugate_gradient(
+            &operator,
+            None,
+            &EvaluationContext::default(),
+            &[2.0, -3.0],
+            &[0.0; 2],
+            &ConjugateGradientConfig::default(),
+        )
+        .unwrap();
+        assert!(report.converged);
+        assert_eq!(report.solution, [2.0, -3.0]);
     }
 }

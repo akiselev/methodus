@@ -38,14 +38,17 @@ pub use nonlinear::{
     BlockStrategy, IterationTrace, NewtonConfig, SolveReport, solve_blocks, solve_newton,
 };
 pub use operator::{
-    DaeOperator, LinearOperator, NonlinearOperator, OperatorSymmetry, Preconditioner,
+    DaeOperator, Definiteness, LinearOperator, NonlinearOperator, OperatorProperties,
+    OperatorStructureHint, OperatorSymmetry, Preconditioner, check_properties_consistency,
     verify_dae_jvp, verify_jvp,
 };
 pub use preconditioner::{
     BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, LowerBlock,
 };
 pub use sparse::CsrMatrix;
-pub use transpose::{TransposeOperator, transpose_view, verify_adjoint_identity};
+pub use transpose::{
+    TransposableOperator, TransposeOperator, transpose_view, verify_adjoint_identity,
+};
 pub use verification::{
     ComparisonReport, ComparisonTolerance, ConvergenceOrderReport, ConvergenceSample,
     DerivativeCheckReport, DerivativeSample, TrajectoryNormReport, WorkBudget, WorkBudgetReport,

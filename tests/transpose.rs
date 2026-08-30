@@ -3,8 +3,8 @@
 //! identity on probe vectors.
 
 use methodus::{
-    EvaluationContext, LinearOperator, NumericError, OperatorSymmetry, TransposeOperator,
-    transpose_view, verify_adjoint_identity,
+    EvaluationContext, LinearOperator, NumericError, OperatorSymmetry, TransposableOperator,
+    TransposeOperator, transpose_view, verify_adjoint_identity,
 };
 
 /// Diagonal operator with configurable symmetry declaration.
@@ -90,4 +90,95 @@ fn nonsymmetric_and_unknown_declarations_are_refused() {
             "{error}"
         );
     }
+}
+
+/// Row-major dense operator with an explicit, genuinely matrix-free
+/// transpose action, used to exercise `TransposeOperator::explicit` on a
+/// `Nonsymmetric`-declared, non-square operator.
+struct DenseMatrix {
+    rows: usize,
+    columns: usize,
+    data: Vec<f64>,
+}
+
+impl LinearOperator for DenseMatrix {
+    fn rows(&self) -> usize {
+        self.rows
+    }
+    fn columns(&self) -> usize {
+        self.columns
+    }
+    fn symmetry(&self) -> OperatorSymmetry {
+        OperatorSymmetry::Nonsymmetric
+    }
+    fn apply(
+        &self,
+        _context: &EvaluationContext,
+        input: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        for (row, output_value) in output.iter_mut().enumerate() {
+            *output_value = (0..self.columns)
+                .map(|column| self.data[row * self.columns + column] * input[column])
+                .sum();
+        }
+        Ok(())
+    }
+}
+
+impl TransposableOperator for DenseMatrix {
+    fn apply_transpose(
+        &self,
+        _context: &EvaluationContext,
+        input: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        for (column, output_value) in output.iter_mut().enumerate() {
+            *output_value = (0..self.rows)
+                .map(|row| self.data[row * self.columns + column] * input[row])
+                .sum();
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn explicit_transpose_works_for_a_matrix_free_nonsymmetric_operator() {
+    let context = EvaluationContext::reproducible();
+    // A 2x3 rectangular, declared-Nonsymmetric matrix-free operator.
+    let matrix = DenseMatrix {
+        rows: 2,
+        columns: 3,
+        data: vec![1.0, 2.0, -1.0, 0.0, 3.0, 4.0],
+    };
+
+    // Symmetric delegation is refused for a Nonsymmetric declaration.
+    assert!(TransposeOperator::new(&matrix).is_err());
+
+    let transpose = TransposeOperator::explicit(&matrix);
+    assert_eq!(transpose.rows(), 3);
+    assert_eq!(transpose.columns(), 2);
+
+    let input = [1.0, -1.0];
+    let mut via_transpose_operator = vec![0.0; 3];
+    transpose
+        .apply(&context, &input, &mut via_transpose_operator)
+        .unwrap();
+
+    let mut via_direct_action = vec![0.0; 3];
+    matrix
+        .apply_transpose(&context, &input, &mut via_direct_action)
+        .unwrap();
+    assert_eq!(via_transpose_operator, via_direct_action);
+
+    let discrepancy = verify_adjoint_identity(
+        &matrix,
+        &transpose,
+        &context,
+        &[2.0, -3.0, 0.5],
+        &input,
+        1.0e-12,
+    )
+    .unwrap();
+    assert!(discrepancy < 1.0e-12);
 }

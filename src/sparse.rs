@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{EvaluationContext, LinearOperator, NumericError, OperatorSymmetry};
+use crate::{
+    EvaluationContext, LinearOperator, NumericError, OperatorSymmetry, TransposableOperator,
+};
 
 /// Canonical compressed-sparse-row matrix with sorted, unique columns per row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -252,6 +254,37 @@ impl LinearOperator for CsrMatrix {
     }
 }
 
+impl TransposableOperator for CsrMatrix {
+    /// Applies `Aᵀ x` by a transposed traversal of the canonical CSR storage,
+    /// without materializing a transposed matrix.
+    ///
+    /// # Reduction order
+    /// Rows of `A` are visited in increasing order `0..rows`; for each row's
+    /// sorted column entries, `values[entry] * input[row]` is accumulated
+    /// into `output[column]`. For a fixed output index, contributions from
+    /// different rows therefore always arrive in increasing row order,
+    /// giving a deterministic summation order that depends only on the
+    /// canonical CSR layout, not on any input traversal order.
+    fn apply_transpose(
+        &self,
+        _context: &EvaluationContext,
+        input: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        NumericError::require_len("CSR transpose input", input.len(), self.rows)?;
+        NumericError::require_len("CSR transpose output", output.len(), self.columns)?;
+        NumericError::require_finite("CSR transpose input", input)?;
+        output.fill(0.0);
+        for (row, &scale) in input.iter().enumerate() {
+            for entry in self.row_offsets[row]..self.row_offsets[row + 1] {
+                let column = self.column_indices[entry];
+                output[column] += self.values[entry] * scale;
+            }
+        }
+        NumericError::require_finite("CSR transpose output", output)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +330,69 @@ mod tests {
             .apply(&EvaluationContext::reproducible(), &[3.0, 5.0], &mut output)
             .unwrap();
         assert_eq!(output, vec![1.0, 20.0]);
+    }
+
+    #[test]
+    fn transpose_action_matches_a_materialized_transpose() {
+        let context = EvaluationContext::reproducible();
+        let matrix = CsrMatrix::from_triplets(
+            2,
+            3,
+            vec![(0, 0, 2.0), (0, 2, -1.0), (1, 1, 4.0), (1, 2, 3.0)],
+        )
+        .unwrap();
+        let materialized_transpose = CsrMatrix::from_triplets(
+            3,
+            2,
+            vec![(0, 0, 2.0), (2, 0, -1.0), (1, 1, 4.0), (2, 1, 3.0)],
+        )
+        .unwrap();
+
+        let input = [5.0, -2.0];
+        let mut traversal_output = vec![0.0; 3];
+        matrix
+            .apply_transpose(&context, &input, &mut traversal_output)
+            .unwrap();
+
+        let mut materialized_output = vec![0.0; 3];
+        materialized_transpose
+            .apply(&context, &input, &mut materialized_output)
+            .unwrap();
+
+        assert_eq!(traversal_output, materialized_output);
+    }
+
+    #[test]
+    fn transpose_action_satisfies_the_adjoint_identity() {
+        use crate::verify_adjoint_identity;
+
+        let context = EvaluationContext::reproducible();
+        let matrix = CsrMatrix::from_triplets(
+            2,
+            3,
+            vec![(0, 0, 2.0), (0, 2, -1.0), (1, 1, 4.0), (1, 2, 3.0)],
+        )
+        .unwrap();
+        let transpose = crate::TransposeOperator::explicit(&matrix);
+
+        let discrepancy = verify_adjoint_identity(
+            &matrix,
+            &transpose,
+            &context,
+            &[1.0, -2.0, 0.5],
+            &[3.0, -1.0],
+            1.0e-12,
+        )
+        .unwrap();
+        assert!(discrepancy < 1.0e-12);
+    }
+
+    #[test]
+    fn transpose_action_rejects_mismatched_dimensions() {
+        let matrix = CsrMatrix::from_triplets(2, 3, vec![(0, 0, 1.0)]).unwrap();
+        let error = matrix
+            .apply_transpose(&EvaluationContext::default(), &[1.0], &mut [0.0; 3])
+            .unwrap_err();
+        assert!(matches!(error, NumericError::DimensionMismatch { .. }));
     }
 }
