@@ -9,9 +9,11 @@ mod bdf;
 mod block;
 mod context;
 mod error;
+mod krylov;
 mod least_squares;
 mod linear;
 mod nonlinear;
+mod nullspace;
 mod operator;
 mod preconditioner;
 mod sparse;
@@ -26,6 +28,7 @@ pub use block::{
 };
 pub use context::EvaluationContext;
 pub use error::{NumericError, SolveError};
+pub use krylov::{GmresConfig, GmresReport, MinresConfig, solve_gmres, solve_minres};
 pub use least_squares::{
     LeastSquaresConfig, LeastSquaresIteration, LeastSquaresOperator, LeastSquaresReport,
     solve_least_squares, verify_least_squares_jacobian,
@@ -37,13 +40,15 @@ pub use linear::{
 pub use nonlinear::{
     BlockStrategy, IterationTrace, NewtonConfig, SolveReport, solve_blocks, solve_newton,
 };
+pub use nullspace::{ConstantModeProjector, NullspaceProjector};
 pub use operator::{
     DaeOperator, Definiteness, LinearOperator, NonlinearOperator, OperatorProperties,
     OperatorStructureHint, OperatorSymmetry, Preconditioner, check_properties_consistency,
     verify_dae_jvp, verify_jvp,
 };
 pub use preconditioner::{
-    BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, LowerBlock,
+    BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, CompositeBlockPreconditioner,
+    LowerBlock,
 };
 pub use sparse::CsrMatrix;
 pub use transpose::{

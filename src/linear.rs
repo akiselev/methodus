@@ -216,7 +216,7 @@ fn validate_config(config: &ConjugateGradientConfig) -> Result<(), SolveError> {
     Ok(())
 }
 
-fn apply_preconditioner(
+pub(crate) fn apply_preconditioner(
     preconditioner: Option<&dyn Preconditioner>,
     context: &EvaluationContext,
     input: &[f64],
@@ -230,7 +230,7 @@ fn apply_preconditioner(
     NumericError::require_finite("preconditioner action", output)
 }
 
-fn dot(left: &[f64], right: &[f64]) -> Result<f64, NumericError> {
+pub(crate) fn dot(left: &[f64], right: &[f64]) -> Result<f64, NumericError> {
     let value = left
         .iter()
         .zip(right)
@@ -239,7 +239,7 @@ fn dot(left: &[f64], right: &[f64]) -> Result<f64, NumericError> {
     Ok(value)
 }
 
-fn l2(values: &[f64]) -> Result<f64, NumericError> {
+pub(crate) fn l2(values: &[f64]) -> Result<f64, NumericError> {
     let norm = dot(values, values)?.sqrt();
     NumericError::require_finite("linear residual norm", &[norm])?;
     Ok(norm)

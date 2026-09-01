@@ -199,6 +199,103 @@ impl BlockPreconditioner for BlockLowerTriangularPreconditioner {
     }
 }
 
+/// Block-diagonal composition of caller-supplied per-block preconditioners.
+///
+/// SV2-B6's bounded reference implementation of the block preconditioner
+/// contract a Schur-complement/pressure-mass saddle-point shape needs (e.g.
+/// Stokes): each block of a [`BlockLayout`] is preconditioned independently
+/// by a caller-supplied [`Preconditioner`] — a velocity-block approximation
+/// composed block-diagonally with a pressure-mass or Schur-complement
+/// approximation, with no coupling between blocks. This is not a full
+/// preconditioner library; callers construct whatever per-block
+/// approximation their operator needs (including a nested
+/// [`BlockDiagonalPreconditioner`] or [`BlockLowerTriangularPreconditioner`])
+/// and compose it here.
+pub struct CompositeBlockPreconditioner<'a> {
+    layout: BlockLayout,
+    blocks: Vec<&'a dyn Preconditioner>,
+}
+
+impl std::fmt::Debug for CompositeBlockPreconditioner<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CompositeBlockPreconditioner")
+            .field("layout", &self.layout)
+            .field("block_count", &self.blocks.len())
+            .finish()
+    }
+}
+
+impl<'a> CompositeBlockPreconditioner<'a> {
+    /// Builds a validated block-diagonal composition.
+    ///
+    /// # Errors
+    /// Refuses a block count that does not match the layout, or any block
+    /// whose dimension does not match its layout entry's length.
+    pub fn new(
+        layout: BlockLayout,
+        blocks: Vec<&'a dyn Preconditioner>,
+    ) -> Result<Self, NumericError> {
+        NumericError::require_len(
+            "composite block preconditioner block count",
+            blocks.len(),
+            layout.blocks().len(),
+        )?;
+        for (index, (block, spec)) in blocks.iter().zip(layout.blocks()).enumerate() {
+            if block.dimension() != spec.length() {
+                return Err(NumericError::DimensionMismatch {
+                    operation: format!(
+                        "composite block preconditioner block {index} (`{}`)",
+                        spec.name()
+                    ),
+                    expected: spec.length(),
+                    actual: block.dimension(),
+                });
+            }
+        }
+        Ok(Self { layout, blocks })
+    }
+}
+
+impl Preconditioner for CompositeBlockPreconditioner<'_> {
+    fn dimension(&self) -> usize {
+        self.layout.dimension()
+    }
+
+    fn apply_inverse(
+        &self,
+        context: &EvaluationContext,
+        right_hand_side: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        NumericError::require_len(
+            "composite block preconditioner right-hand side",
+            right_hand_side.len(),
+            self.dimension(),
+        )?;
+        NumericError::require_len(
+            "composite block preconditioner output",
+            output.len(),
+            self.dimension(),
+        )?;
+        NumericError::require_finite(
+            "composite block preconditioner right-hand side",
+            right_hand_side,
+        )?;
+        for (block, spec) in self.blocks.iter().zip(self.layout.blocks()) {
+            let range = spec.range();
+            block.apply_inverse(context, &right_hand_side[range.clone()], &mut output[range])?;
+        }
+        NumericError::require_finite("composite block preconditioner output", output)
+    }
+}
+
+impl BlockPreconditioner for CompositeBlockPreconditioner<'_> {
+    fn block_layout(&self) -> &BlockLayout {
+        &self.layout
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +358,99 @@ mod tests {
             "inverse_diagonal": []
         }"#;
         assert!(serde_json::from_str::<BlockDiagonalPreconditioner>(malformed).is_err());
+    }
+
+    #[test]
+    fn composite_block_preconditioner_applies_each_block_independently() {
+        // A saddle-point-shaped 3-block layout: two "velocity" blocks and
+        // one "pressure" block, each preconditioned by an unrelated
+        // caller-supplied approximation (e.g. a pressure-mass diagonal).
+        let saddle_layout = BlockLayout::new(vec![
+            BlockSpec {
+                name: "velocity".into(),
+                length: 2,
+                residual_scale: 1.0,
+            },
+            BlockSpec {
+                name: "pressure".into(),
+                length: 1,
+                residual_scale: 1.0,
+            },
+        ])
+        .unwrap();
+        let velocity = BlockDiagonalPreconditioner::new(
+            BlockLayout::new(vec![BlockSpec {
+                name: "velocity".into(),
+                length: 2,
+                residual_scale: 1.0,
+            }])
+            .unwrap(),
+            vec![0.5, 0.25],
+        )
+        .unwrap();
+        let pressure = BlockDiagonalPreconditioner::new(
+            BlockLayout::new(vec![BlockSpec {
+                name: "pressure".into(),
+                length: 1,
+                residual_scale: 1.0,
+            }])
+            .unwrap(),
+            vec![2.0],
+        )
+        .unwrap();
+        let composite =
+            CompositeBlockPreconditioner::new(saddle_layout, vec![&velocity, &pressure]).unwrap();
+        let mut output = vec![0.0; 3];
+        composite
+            .apply_inverse(
+                &EvaluationContext::reproducible(),
+                &[2.0, 8.0, 3.0],
+                &mut output,
+            )
+            .unwrap();
+        assert_eq!(output, vec![1.0, 2.0, 6.0]);
+    }
+
+    #[test]
+    fn composite_block_preconditioner_refuses_mismatched_block_dimensions() {
+        let mismatched = BlockDiagonalPreconditioner::new(
+            BlockLayout::new(vec![BlockSpec {
+                name: "wrong".into(),
+                length: 3,
+                residual_scale: 1.0,
+            }])
+            .unwrap(),
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let matching = BlockDiagonalPreconditioner::new(
+            BlockLayout::new(vec![BlockSpec {
+                name: "b".into(),
+                length: 1,
+                residual_scale: 1.0,
+            }])
+            .unwrap(),
+            vec![1.0],
+        )
+        .unwrap();
+        let error =
+            CompositeBlockPreconditioner::new(layout(), vec![&mismatched, &matching]).unwrap_err();
+        assert!(matches!(error, NumericError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn composite_block_preconditioner_refuses_a_block_count_mismatch() {
+        let single = BlockDiagonalPreconditioner::new(
+            BlockLayout::new(vec![BlockSpec {
+                name: "a".into(),
+                length: 1,
+                residual_scale: 1.0,
+            }])
+            .unwrap(),
+            vec![1.0],
+        )
+        .unwrap();
+        let error = CompositeBlockPreconditioner::new(layout(), vec![&single]).unwrap_err();
+        assert!(matches!(error, NumericError::DimensionMismatch { .. }));
     }
 }
