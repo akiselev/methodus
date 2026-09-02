@@ -15,9 +15,24 @@
 //! [`verify_adjoint_identity`] checks `<A u, v> == <u, Aᵀ v>` on caller-chosen
 //! probes; [`transpose_view`] is the entry point adjoint solves use.
 
+use serde::{Deserialize, Serialize};
+
 use crate::context::EvaluationContext;
 use crate::error::NumericError;
-use crate::operator::{LinearOperator, OperatorSymmetry};
+use crate::operator::{
+    LinearOperator, OperatorProperties, OperatorStructureHint, OperatorSymmetry,
+};
+
+/// How a [`TransposeOperator`] obtains its transpose action; reported by
+/// adjoint solves so evidence records which path produced `Aᵀ`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransposeSource {
+    /// `A = Aᵀ` under the admitted `Symmetric` declaration.
+    SymmetricDelegation,
+    /// An explicit [`TransposableOperator::apply_transpose`] action.
+    ExplicitTranspose,
+}
 
 /// Matrix-free operators whose transpose (column-space) action can be
 /// computed directly, independent of any symmetry declaration.
@@ -84,6 +99,21 @@ impl<'a, T: LinearOperator + ?Sized> TransposeOperator<'a, T> {
         }
     }
 
+    /// Which path supplies this view's transpose action.
+    #[must_use]
+    pub const fn source(&self) -> TransposeSource {
+        match self.action {
+            TransposeAction::Delegated => TransposeSource::SymmetricDelegation,
+            TransposeAction::Explicit(_) => TransposeSource::ExplicitTranspose,
+        }
+    }
+
+    /// The wrapped primal operator.
+    #[must_use]
+    pub const fn inner(&self) -> &T {
+        self.inner
+    }
+
     /// Wraps one borrowed [`TransposableOperator`] using its explicit
     /// transpose action.
     ///
@@ -119,6 +149,27 @@ impl<T: LinearOperator + ?Sized> LinearOperator for TransposeOperator<'_, T> {
         // wrapped operator declares also holds for its transpose, regardless
         // of which action mode produced this view.
         self.inner.symmetry()
+    }
+
+    /// Properties of `Aᵀ` derived from those declared for `A`: symmetry and
+    /// definiteness are transpose-invariant (`xᵀAᵀx = xᵀAx`), and for a
+    /// square operator so are the nullspace dimension (equal rank) and the
+    /// block structure (input and output share one partition). For a
+    /// rectangular operator the nullspace dimensions of `A` and `Aᵀ` differ
+    /// and the block structure does not transfer, so both are dropped.
+    fn properties(&self) -> OperatorProperties {
+        let inner = self.inner.properties();
+        if self.inner.rows() == self.inner.columns() {
+            inner
+        } else {
+            OperatorProperties::new(
+                inner.symmetry(),
+                inner.definiteness(),
+                None,
+                OperatorStructureHint::Dense,
+            )
+            .unwrap_or_else(|_| OperatorProperties::from_symmetry(inner.symmetry()))
+        }
     }
 
     fn apply(

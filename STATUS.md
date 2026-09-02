@@ -1,10 +1,60 @@
 # Methodus status
 
-Updated: 2026-08-31
+Updated: 2026-09-01
 Branch: `master`
-Milestone: SV2-B6 MINRES/GMRES, nullspace projection, and block
-preconditioner contracts (previously: SV0-B1 checkers, SV1-C5/D1
-transpose/adjoint)
+Milestone: W7 lane 3 — E7/SV1-D1 adjoint solve on nonsymmetric operators
+(previously: SV2-B6 MINRES/GMRES, nullspace projection, and block
+preconditioner contracts; SV0-B1 checkers; SV1-C5 transposes)
+
+## E7/SV1-D1 adjoint solve on nonsymmetric operators (W7, 2026-09-01)
+
+`solve_adjoint` solves `Aᵀ λ = g` through a `TransposeOperator` view of `A`
+and never approximates a transpose: the view is built either by symmetric
+delegation (`TransposeOperator::new`, refused unless `Symmetric` is declared)
+or from an explicit `TransposableOperator::apply_transpose`
+(`TransposeOperator::explicit`, the assembled-operator path — `CsrMatrix`
+implements it by transposed CSR traversal). An operator offering neither is
+refused at construction, before any iteration. `TransposeOperator` now
+reports its `TransposeSource` (`SymmetricDelegation | ExplicitTranspose`) and
+carries the primal `OperatorProperties` through (definiteness and symmetry
+are transpose-invariant; nullspace dimension and block structure only for
+square operators).
+
+Method selection is one serializable `KrylovMethod` value
+(`ConjugateGradient | Minres | Gmres | BiCgStab`, each with its full
+config) dispatched by `solve_krylov` without loosening any solver's own
+admission; the adjoint driver additionally refuses conjugate gradient on a
+`Nonsymmetric` transpose and MINRES on a `Nonsymmetric`/`Unknown` one with
+adjoint-specific refusal text. `solve_bicgstab` is new: right-preconditioned
+van der Vorst BiCGSTAB whose reported residuals are always the true
+`‖b − A x‖`, with Lanczos-type breakdowns typed as `KrylovBreakdown`.
+Acceptance is residual-based and method-independent: after the Krylov
+solve the driver recomputes `g − Aᵀ λ` through the transpose action and sets
+`converged` only from that norm against `ResidualAcceptance`, independent of
+the inner solver's (possibly preconditioner-weighted) estimate, which is
+reported separately as `solver_converged`. An exhausted budget returns
+`converged == false` with the measured residual, never an error and never a
+claim. Telemetry (`AdjointSolveReport`) is typed and bit-reproducible.
+
+Acceptance tests (`tests/adjoint.rs`, 9): `<λ, b> = <g, u>` for `A u = b`
+and `Aᵀ λ = g` within 1e-10 on a 6x6 nonsymmetric dense fixture and a 12x12
+nonsymmetric upwind convection–diffusion `CsrMatrix`, through both GMRES and
+BiCGSTAB; CG/MINRES refusal on a nonsymmetric transpose; refusal of a
+transpose-less matrix-free operator before any solve; rectangular refusal;
+acceptance measured on the true residual under a left preconditioner; budget
+exhaustion reported as non-acceptance; bit-identical and JSON-round-trip
+telemetry; transpose property carry-through. Unit tests cover BiCGSTAB (true
+residuals with and without preconditioning, determinism, rectangular
+refusal) and the dispatcher (kind reporting, per-solver admission kept, CG
+refusing a projector, GMRES with a projector reaching the pseudo-solution of
+a singular consistent system, tolerance override keeping other fields).
+
+Deviation recorded: C11.16 said GMRES takes no nullspace projector. The
+dispatcher gives GMRES/BiCGSTAB a projector hook that projects only the
+initial guess and the returned solution (selecting the representative
+orthogonal to the declared nullspace without touching the residual, so
+acceptance stays honest); `solve_gmres`/`solve_bicgstab` signatures are
+unchanged. Conjugate gradient still refuses a projector.
 
 ## SV2-B6 Krylov slice
 
@@ -74,6 +124,14 @@ The repository is one root package named `methodus`. There are no subordinate co
 - Deterministic restarted GMRES over `LinearOperator`/`Preconditioner`, admitting any declared
   symmetry and refusing only a non-square operator; modified Gram-Schmidt Arnoldi with incremental
   Givens-rotation QR, left preconditioning, and per-restart-cycle telemetry.
+- Deterministic right-preconditioned BiCGSTAB (`solve_bicgstab`) admitting any declared symmetry,
+  refusing only a non-square operator, reporting true residuals, and typing Lanczos breakdowns.
+- `KrylovMethod`/`solve_krylov`: one serializable selector over CG/MINRES/GMRES/BiCGSTAB with
+  per-solver admission preserved and a nullspace-projector hook (native in MINRES; endpoint
+  projection for GMRES/BiCGSTAB; refused for CG).
+- `solve_adjoint`: `Aᵀ λ = g` through `TransposeOperator` (symmetric delegation or explicit
+  `TransposableOperator`), property-aware method refusal, true-residual acceptance, typed
+  deterministic telemetry including the `TransposeSource`.
 - `NullspaceProjector` trait plus the bounded reference `ConstantModeProjector` (one constant mode
   over a contiguous coordinate range).
 - `CompositeBlockPreconditioner`: block-diagonal composition of caller-supplied per-block
@@ -118,13 +176,16 @@ This is an intentional API break. No compatibility types, feature aliases, or fo
 
 ## Validation
 
-Validated locally on 2026-08-31 (SV2-B6 slice):
+Validated locally on 2026-09-01 (E7/SV1-D1 adjoint slice):
 
-- formatting and locked all-target checks passed;
+- formatting and all-target checks passed;
 - warnings-denied Clippy passed;
-- 65 tests passed (53 unit, 12 integration), 0 failed;
-- warnings-denied rustdoc passed; doctests passed (0 doctests present);
-- `git diff --check` passed, including the two new source files.
+- 83 tests passed (62 unit, 21 integration), 0 failed;
+- warnings-denied rustdoc passed; doctests passed (0 doctests present).
+
+Prior validation (2026-08-31, SV2-B6 slice, 65 tests): formatting, locked
+all-target checks, warnings-denied Clippy, warnings-denied rustdoc/doctests,
+and `git diff --check` all passed.
 
 Prior validation (2026-08-24, 31 tests): formatting, locked all-target
 checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
@@ -136,17 +197,26 @@ checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
   dense/block `OperatorStructureHint` with a saddle-point flag) landed under
   GX-D2 before this slice; the three-valued-symmetry-only limit an earlier
   2026-08-30 audit recorded here is resolved.
-- The transpose contract still accepts only `Symmetric` operators via
-  delegation (`TransposableOperator` covers explicit nonsymmetric
-  transposes), and Finitum's matrix-free operator still never declares
-  either, so `transpose_view` remains unusable on the current Finitum
-  realization path — unchanged by this slice, tracked upstream.
+- A transpose exists only by `Symmetric` delegation or an explicit
+  `TransposableOperator`; Finitum's matrix-free operators implement neither
+  today, so `solve_adjoint` is usable on `CsrMatrix`-shaped assembled
+  operators and on whatever Finitum's SV1-C1 lane makes `TransposableOperator`
+  (W7 lane 2), not on the current Finitum matrix-free path.
+- `solve_adjoint` takes a preconditioner for `Aᵀ`; Methodus offers no
+  transposed-preconditioner adapter, so a caller with an approximate inverse
+  of `A` must transpose it itself where the two differ.
+- Linear-solve *sensitivity* beyond the adjoint solve (tangent solves with a
+  caller-differentiated right-hand side `∂b/∂p − (∂A/∂p) u`) needs no new
+  Methodus algorithm — it is a primal `solve_krylov` — and no wrapper was
+  added for it; the parameter-derivative actions are Finitum's (SV1-C3).
 - Block preconditioning is limited to block-diagonal and block-lower-
   triangular composition (`BlockDiagonalPreconditioner`,
   `BlockLowerTriangularPreconditioner`, `CompositeBlockPreconditioner`); no
   algebraic multigrid, incomplete factorization, or Schur-complement
   *computation* exists — only the composition contract. A caller must supply
   its own approximate Schur-complement/pressure-mass block preconditioner.
+- BiCGSTAB has no restart or look-ahead; a Lanczos breakdown is a typed
+  error, and a caller wanting robustness against it selects GMRES.
 - MINRES's nullspace-projection hook ships one bounded reference
   implementation, `ConstantModeProjector` (a single constant mode over one
   contiguous coordinate range). Multi-dimensional nullspaces (e.g.
@@ -162,12 +232,16 @@ checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
    constraint systems and independent numerical checks.
 3. Replace dense Newton only after representative compiled systems define
    scaling and performance requirements.
-4. SC composition (design `sinbad/ARCHITECTURE.md` §8–9; the SV7-F3 subset
-   pulled forward under its own ID): an inexact Newton–Krylov driver (today
-   `solve_newton` builds a dense Jacobian by JVP column probing) and fixed-point
-   acceleration over `&[f64]` iterate sequences (relaxation, Aitken; IQN later).
-   `solve_blocks` GS/Jacobi and `CompositeBlockPreconditioner` are reused as they
-   are. Methodus never sees instance names, outputs, or connector vocabulary;
+4. W7 lane 3, next package: an inexact Newton–Krylov driver over a
+   matrix-free JVP operator with a pluggable `KrylovMethod`, a preconditioner
+   hook, and a nullspace-projector hook (today `solve_newton` builds a dense
+   Jacobian by JVP column probing), needed by Krasis's N-block DAE with Newton
+   inside BDF (batch P) and SC-W3.
+5. SC composition (design `sinbad/ARCHITECTURE.md` §8–9; the SV7-F3 subset
+   pulled forward under its own ID): fixed-point acceleration over `&[f64]`
+   iterate sequences (relaxation, Aitken; IQN later). `solve_blocks`
+   GS/Jacobi and `CompositeBlockPreconditioner` are reused as they are.
+   Methodus never sees instance names, outputs, or connector vocabulary;
    Sinbad resolves schedules and convergence targets to block ids.
 
 Blockers: none.

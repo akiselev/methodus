@@ -1,5 +1,5 @@
-//! SV2-B6: MINRES and GMRES, physics-neutral iterative linear solvers over
-//! the existing Methodus operator traits.
+//! SV2-B6: MINRES and GMRES (plus E7's BiCGSTAB), physics-neutral iterative
+//! linear solvers over the existing Methodus operator traits.
 //!
 //! Both solvers mirror [`crate::solve_conjugate_gradient`]'s refusal
 //! machinery — typed refusal codes, never panics, never a silent fallback —
@@ -16,6 +16,10 @@
 //!   (see [`crate::nullspace`]).
 //! - [`solve_gmres`] accepts any declared symmetry and refuses only a
 //!   genuinely unsupported shape (a non-square operator).
+//! - [`solve_bicgstab`] (E7/SV1-D1) is the short-recurrence companion to
+//!   GMRES for nonsymmetric adjoint and Jacobian actions; it admits any
+//!   declared symmetry, refuses only a non-square operator, and reports
+//!   Lanczos-type breakdowns as typed errors.
 //!
 //! Both report deterministic, bit-reproducible telemetry as typed
 //! [`crate::LinearIteration`] traces, following a fixed reduction and update
@@ -529,6 +533,206 @@ fn validate_gmres_config(config: &GmresConfig) -> Result<(), SolveError> {
     Ok(())
 }
 
+/// Convergence policy for a BiCGSTAB solve.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BiCgStabConfig {
+    pub max_iterations: usize,
+    pub absolute_tolerance: f64,
+    pub relative_tolerance: f64,
+}
+
+impl Default for BiCgStabConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 1_000,
+            absolute_tolerance: 1.0e-12,
+            relative_tolerance: 1.0e-10,
+        }
+    }
+}
+
+/// Solve a general (possibly nonsymmetric) square system with the
+/// stabilized bi-conjugate gradient method (van der Vorst's BiCGSTAB), using
+/// right preconditioning so that `residual_norm` in the returned trace is
+/// always the true Euclidean residual `‖b − A x‖`, with or without a
+/// preconditioner.
+///
+/// BiCGSTAB admits any declared symmetry and, like GMRES, refuses only a
+/// non-square operator. It is a short-recurrence alternative to restarted
+/// GMRES for adjoint and Newton–Krylov solves whose transpose or Jacobian
+/// action is nonsymmetric. The Lanczos-type breakdowns of the method (a
+/// vanishing shadow inner product `<r̂, r>`, `<r̂, v>`, or stabilization
+/// denominator `<t, t>`) are reported as [`SolveError::KrylovBreakdown`],
+/// never silently restarted.
+///
+/// # Errors
+/// Refuses a non-square operator, invalid configuration, dimension
+/// mismatches, non-finite input, and Lanczos breakdown.
+pub fn solve_bicgstab(
+    operator: &(impl LinearOperator + ?Sized),
+    preconditioner: Option<&dyn Preconditioner>,
+    context: &EvaluationContext,
+    right_hand_side: &[f64],
+    initial_solution: &[f64],
+    config: &BiCgStabConfig,
+) -> Result<LinearSolveReport, SolveError> {
+    validate_bicgstab_config(config)?;
+    let dimension = operator.rows();
+    if operator.columns() != dimension {
+        return Err(SolveError::InvalidConfiguration {
+            reason: format!(
+                "bicgstab requires a square operator, got {}x{}",
+                operator.rows(),
+                operator.columns()
+            ),
+        });
+    }
+    NumericError::require_len("bicgstab right-hand side", right_hand_side.len(), dimension)?;
+    NumericError::require_len(
+        "initial bicgstab solution",
+        initial_solution.len(),
+        dimension,
+    )?;
+    NumericError::require_finite("bicgstab right-hand side", right_hand_side)?;
+    NumericError::require_finite("initial bicgstab solution", initial_solution)?;
+    if let Some(preconditioner) = preconditioner
+        && preconditioner.dimension() != dimension
+    {
+        return Err(SolveError::InvalidConfiguration {
+            reason: format!(
+                "preconditioner dimension {} differs from operator dimension {dimension}",
+                preconditioner.dimension()
+            ),
+        });
+    }
+
+    let mut x = initial_solution.to_vec();
+    let mut r = vec![0.0; dimension];
+    operator.apply(context, &x, &mut r)?;
+    NumericError::require_finite("initial bicgstab operator action", &r)?;
+    for (residual, rhs) in r.iter_mut().zip(right_hand_side) {
+        *residual = rhs - *residual;
+    }
+    let initial_norm = l2(&r)?;
+    let threshold = config.absolute_tolerance + config.relative_tolerance * initial_norm;
+    let mut trace = vec![LinearIteration {
+        iteration: 0,
+        residual_norm: initial_norm,
+    }];
+    if initial_norm <= threshold {
+        return Ok(LinearSolveReport {
+            solution: x,
+            converged: true,
+            trace,
+        });
+    }
+
+    // The shadow residual is fixed at the initial residual, the standard
+    // deterministic choice.
+    let shadow = r.clone();
+    let mut rho_old = 1.0_f64;
+    let mut alpha = 1.0_f64;
+    let mut omega = 1.0_f64;
+    let mut p = vec![0.0; dimension];
+    let mut v = vec![0.0; dimension];
+    let mut p_hat = vec![0.0; dimension];
+    let mut s = vec![0.0; dimension];
+    let mut s_hat = vec![0.0; dimension];
+    let mut t = vec![0.0; dimension];
+
+    for iteration in 1..=config.max_iterations {
+        let rho = dot(&shadow, &r)?;
+        if rho == 0.0 {
+            return Err(SolveError::KrylovBreakdown { iteration });
+        }
+        let beta = (rho / rho_old) * (alpha / omega);
+        NumericError::require_finite("bicgstab recurrence", &[beta])?;
+        for ((p, r), v) in p.iter_mut().zip(&r).zip(&v) {
+            *p = r + beta * (*p - omega * v);
+        }
+        apply_preconditioner(preconditioner, context, &p, &mut p_hat)?;
+        operator.apply(context, &p_hat, &mut v)?;
+        NumericError::require_finite("bicgstab operator action", &v)?;
+        let shadow_v = dot(&shadow, &v)?;
+        if shadow_v == 0.0 {
+            return Err(SolveError::KrylovBreakdown { iteration });
+        }
+        alpha = rho / shadow_v;
+        NumericError::require_finite("bicgstab step", &[alpha])?;
+        for ((s, r), v) in s.iter_mut().zip(&r).zip(&v) {
+            *s = r - alpha * v;
+        }
+        for (x, p_hat) in x.iter_mut().zip(&p_hat) {
+            *x += alpha * p_hat;
+        }
+        let half_norm = l2(&s)?;
+        if half_norm <= threshold {
+            NumericError::require_finite("bicgstab solution", &x)?;
+            trace.push(LinearIteration {
+                iteration,
+                residual_norm: half_norm,
+            });
+            return Ok(LinearSolveReport {
+                solution: x,
+                converged: true,
+                trace,
+            });
+        }
+        apply_preconditioner(preconditioner, context, &s, &mut s_hat)?;
+        operator.apply(context, &s_hat, &mut t)?;
+        NumericError::require_finite("bicgstab operator action", &t)?;
+        let t_t = dot(&t, &t)?;
+        if t_t == 0.0 {
+            return Err(SolveError::KrylovBreakdown { iteration });
+        }
+        omega = dot(&t, &s)? / t_t;
+        NumericError::require_finite("bicgstab stabilization", &[omega])?;
+        for (x, s_hat) in x.iter_mut().zip(&s_hat) {
+            *x += omega * s_hat;
+        }
+        for ((r, s), t) in r.iter_mut().zip(&s).zip(&t) {
+            *r = s - omega * t;
+        }
+        NumericError::require_finite("bicgstab solution", &x)?;
+        let residual_norm = l2(&r)?;
+        trace.push(LinearIteration {
+            iteration,
+            residual_norm,
+        });
+        if residual_norm <= threshold {
+            return Ok(LinearSolveReport {
+                solution: x,
+                converged: true,
+                trace,
+            });
+        }
+        if omega == 0.0 {
+            return Err(SolveError::KrylovBreakdown { iteration });
+        }
+        rho_old = rho;
+    }
+
+    Ok(LinearSolveReport {
+        solution: x,
+        converged: false,
+        trace,
+    })
+}
+
+fn validate_bicgstab_config(config: &BiCgStabConfig) -> Result<(), SolveError> {
+    let tolerances_valid = config.absolute_tolerance.is_finite()
+        && config.absolute_tolerance >= 0.0
+        && config.relative_tolerance.is_finite()
+        && config.relative_tolerance >= 0.0
+        && (config.absolute_tolerance > 0.0 || config.relative_tolerance > 0.0);
+    if config.max_iterations == 0 || !tolerances_valid {
+        return Err(SolveError::InvalidConfiguration {
+            reason: "bicgstab iteration limit and tolerances must be positive and finite".into(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,5 +1138,131 @@ mod tests {
         for (actual, expected) in report.solution.iter().zip(&expected) {
             assert!((actual - expected).abs() < 1.0e-8, "{actual} vs {expected}");
         }
+    }
+
+    #[test]
+    fn bicgstab_solves_a_nonsymmetric_fixture_and_reports_true_residuals() {
+        let (matrix, rhs, expected) = nonsymmetric_matrix_with_known_solution();
+        let context = EvaluationContext::reproducible();
+        let report = solve_bicgstab(
+            &matrix,
+            None,
+            &context,
+            &rhs,
+            &[0.0; 3],
+            &BiCgStabConfig::default(),
+        )
+        .unwrap();
+        assert!(report.converged);
+        for (actual, expected) in report.solution.iter().zip(&expected) {
+            assert!((actual - expected).abs() < 1.0e-8, "{actual} vs {expected}");
+        }
+        // The reported final residual is the true residual `‖b − A x‖`.
+        let mut action = vec![0.0; 3];
+        matrix
+            .apply(&context, &report.solution, &mut action)
+            .unwrap();
+        let true_norm = rhs
+            .iter()
+            .zip(&action)
+            .map(|(b, a)| (b - a).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let reported = report.trace.last().unwrap().residual_norm;
+        assert!(
+            (true_norm - reported).abs() < 1.0e-9,
+            "{true_norm} vs {reported}"
+        );
+    }
+
+    #[test]
+    fn bicgstab_with_a_preconditioner_still_reports_true_residuals() {
+        struct DiagonalInverse(Vec<f64>);
+        impl Preconditioner for DiagonalInverse {
+            fn dimension(&self) -> usize {
+                self.0.len()
+            }
+            fn apply_inverse(
+                &self,
+                _context: &EvaluationContext,
+                right_hand_side: &[f64],
+                output: &mut [f64],
+            ) -> Result<(), NumericError> {
+                for ((output, value), diagonal) in
+                    output.iter_mut().zip(right_hand_side).zip(&self.0)
+                {
+                    *output = value / diagonal;
+                }
+                Ok(())
+            }
+        }
+        let (matrix, rhs, expected) = nonsymmetric_matrix_with_known_solution();
+        let context = EvaluationContext::reproducible();
+        let preconditioner = DiagonalInverse(vec![4.0, 3.0, 2.0]);
+        let report = solve_bicgstab(
+            &matrix,
+            Some(&preconditioner),
+            &context,
+            &rhs,
+            &[0.0; 3],
+            &BiCgStabConfig::default(),
+        )
+        .unwrap();
+        assert!(report.converged);
+        for (actual, expected) in report.solution.iter().zip(&expected) {
+            assert!((actual - expected).abs() < 1.0e-8, "{actual} vs {expected}");
+        }
+        let mut action = vec![0.0; 3];
+        matrix
+            .apply(&context, &report.solution, &mut action)
+            .unwrap();
+        let true_norm = rhs
+            .iter()
+            .zip(&action)
+            .map(|(b, a)| (b - a).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let reported = report.trace.last().unwrap().residual_norm;
+        assert!(
+            (true_norm - reported).abs() < 1.0e-9,
+            "{true_norm} vs {reported}"
+        );
+    }
+
+    #[test]
+    fn bicgstab_telemetry_is_bit_reproducible_and_refuses_rectangular_operators() {
+        let (matrix, rhs, _) = nonsymmetric_matrix_with_known_solution();
+        let context = EvaluationContext::reproducible();
+        let first = solve_bicgstab(
+            &matrix,
+            None,
+            &context,
+            &rhs,
+            &[0.0; 3],
+            &BiCgStabConfig::default(),
+        )
+        .unwrap();
+        let second = solve_bicgstab(
+            &matrix,
+            None,
+            &context,
+            &rhs,
+            &[0.0; 3],
+            &BiCgStabConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(first, second);
+
+        let rectangular = CsrMatrix::new(1, 2, vec![0, 1], vec![0], vec![1.0]).unwrap();
+        let error = solve_bicgstab(
+            &rectangular,
+            None,
+            &EvaluationContext::default(),
+            &[1.0],
+            &[0.0, 0.0],
+            &BiCgStabConfig::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
     }
 }

@@ -5,11 +5,13 @@
 
 #![forbid(unsafe_code)]
 
+mod adjoint;
 mod bdf;
 mod block;
 mod context;
 mod error;
 mod krylov;
+mod krylov_method;
 mod least_squares;
 mod linear;
 mod nonlinear;
@@ -20,6 +22,7 @@ mod sparse;
 mod transpose;
 mod verification;
 
+pub use adjoint::{AdjointConfig, AdjointSolveReport, ResidualAcceptance, solve_adjoint};
 pub use bdf::{
     AcceptedStep, BdfConfig, BdfOrder, BdfState, LocatedEvent, RejectedStep, StepOutcome, bdf_step,
 };
@@ -28,7 +31,11 @@ pub use block::{
 };
 pub use context::EvaluationContext;
 pub use error::{NumericError, SolveError};
-pub use krylov::{GmresConfig, GmresReport, MinresConfig, solve_gmres, solve_minres};
+pub use krylov::{
+    BiCgStabConfig, GmresConfig, GmresReport, MinresConfig, solve_bicgstab, solve_gmres,
+    solve_minres,
+};
+pub use krylov_method::{KrylovMethod, KrylovMethodKind, KrylovSolveReport, solve_krylov};
 pub use least_squares::{
     LeastSquaresConfig, LeastSquaresIteration, LeastSquaresOperator, LeastSquaresReport,
     solve_least_squares, verify_least_squares_jacobian,
@@ -52,7 +59,8 @@ pub use preconditioner::{
 };
 pub use sparse::CsrMatrix;
 pub use transpose::{
-    TransposableOperator, TransposeOperator, transpose_view, verify_adjoint_identity,
+    TransposableOperator, TransposeOperator, TransposeSource, transpose_view,
+    verify_adjoint_identity,
 };
 pub use verification::{
     ComparisonReport, ComparisonTolerance, ConvergenceOrderReport, ConvergenceSample,
