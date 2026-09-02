@@ -55,6 +55,48 @@ pub struct SolveReport {
     pub trace: Vec<IterationTrace>,
 }
 
+/// A nonlinear solve strategy that time integrators and other drivers can
+/// be handed instead of being bound to one algorithm.
+///
+/// [`DenseNewton`] wraps [`solve_newton`]; [`crate::NewtonKrylovSolver`]
+/// wraps [`crate::solve_newton_krylov`]. `bdf_step_with` consumes either.
+pub trait NonlinearSolver: Send + Sync {
+    /// Solves `F(x) = 0` from `initial_state`.
+    ///
+    /// # Errors
+    /// Propagates the wrapped algorithm's refusals and failures unchanged.
+    fn solve(
+        &self,
+        operator: &dyn NonlinearOperator,
+        context: &EvaluationContext,
+        initial_state: &[f64],
+    ) -> Result<SolveReport, SolveError>;
+}
+
+/// [`solve_newton`] as a [`NonlinearSolver`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct DenseNewton<'a> {
+    config: &'a NewtonConfig,
+}
+
+impl<'a> DenseNewton<'a> {
+    #[must_use]
+    pub const fn new(config: &'a NewtonConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl NonlinearSolver for DenseNewton<'_> {
+    fn solve(
+        &self,
+        operator: &dyn NonlinearOperator,
+        context: &EvaluationContext,
+        initial_state: &[f64],
+    ) -> Result<SolveReport, SolveError> {
+        solve_newton(operator, context, initial_state, self.config)
+    }
+}
+
 /// Solve an unpartitioned nonlinear system with dense Newton updates.
 pub fn solve_newton(
     operator: &(impl NonlinearOperator + ?Sized),

@@ -3,8 +3,68 @@
 Updated: 2026-09-01
 Branch: `master`
 Milestone: W7 lane 3 — E7/SV1-D1 adjoint solve on nonsymmetric operators
+and the inexact Newton–Krylov driver with preconditioner/nullspace hooks
 (previously: SV2-B6 MINRES/GMRES, nullspace projection, and block
 preconditioner contracts; SV0-B1 checkers; SV1-C5 transposes)
+
+## E7/SC-W3 inexact Newton–Krylov driver (W7, 2026-09-01)
+
+`solve_newton_krylov` solves `F(x) = 0` by inexact Newton over a matrix-free
+Jacobian: `JacobianOperator` exposes `NonlinearOperator::jacobian_vector_
+product` at a frozen state as a square `LinearOperator` whose declared
+`OperatorProperties` come from the new defaulted trait method
+`NonlinearOperator::jacobian_properties` (and `DaeOperator::
+jacobian_properties` for the implicit-step Jacobian `∂F/∂y + α ∂F/∂ẏ`;
+both default to `Unknown`, so admission is honest by default). The inner
+solve is any `KrylovMethod` through `solve_krylov`, so each method's own
+admission applies unchanged (CG refuses a `Nonsymmetric` Jacobian, MINRES
+refuses anything not `Symmetric`, GMRES/BiCGSTAB admit any declaration);
+nothing is ever substituted. `ForcingPolicy` is `Constant { forcing }` or
+`EisenstatWalker { initial, gamma, alpha, maximum }` (choice 2 with the
+collapse safeguard), both floored at half the outer threshold relative to
+`‖F_k‖` so the last inner solves are never oversolved. Globalization is
+backtracking with the Eisenstat–Walker sufficient-decrease condition
+`‖F(x+λs)‖ ≤ (1 − tλ(1−η))‖F(x)‖`. Hooks: `PreconditionerFactory::build`
+is called at every iterate with the frozen Jacobian and state and may return
+`None`; a `NullspaceProjector` is forwarded to `solve_krylov`. Telemetry
+(`NewtonKrylovReport`/`NewtonKrylovIteration`/`LinearStepSummary`) records
+per outer iteration the residual norm, the forcing used, and the inner
+solve's method, iteration count, verdict, final residual, and restart cycles;
+it is bit-reproducible. An inner solve that exhausts its budget is recorded
+and its step still tried (inexact Newton needs only a descent direction);
+a refusal, breakdown, or failed sufficient decrease is a typed error; an
+exhausted outer budget is `converged == false`.
+
+For Krasis's Newton-inside-BDF (batch P): `NonlinearSolver` is a
+`Send + Sync` trait with `solve(&dyn NonlinearOperator, context, initial)`;
+`DenseNewton` wraps `solve_newton`, `NewtonKrylovSolver` wraps
+`solve_newton_krylov`; `bdf_step_with(operator, context, state, step,
+config, solver: &dyn NonlinearSolver)` runs a BDF1/BDF2 attempt with the
+supplied solver (`config.newton` is then not consulted), and the implicit
+operator forwards `DaeOperator::jacobian_properties`. `bdf_step` is
+unchanged in signature and behaviour (`bdf_step_with` over `DenseNewton`).
+
+Acceptance tests (`tests/newton_krylov.rs`, 8): quadratic convergence
+(`‖F_{k+1}‖/‖F_k‖² < 2` in the local regime) on a 2-D nonsymmetric
+algebraic fixture with tiny constant forcing, superlinear convergence
+(strictly decreasing rate reaching `< 1e-2`) with Eisenstat–Walker; CG and
+MINRES refused on the declared-nonsymmetric Jacobian, BiCGSTAB admitted;
+`−u'' + u³ = f` (63 unknowns, SPD-declared Jacobian) through CG with
+quadratic ratios `< 0.1` on every effectively-exact step and the
+manufactured `sin(πx)` recovered to discretization accuracy;
+`−u'' + 8u' + u³ = f` (40 unknowns, nonsymmetric) through GMRES, CG refused
+even with `AssumeSymmetric` (that hatch covers only `Unknown`), an exact
+tridiagonal `PreconditionerFactory` making every inner solve one iteration
+and cutting total linear iterations, and agreement with dense `solve_newton`
+to 1e-10; a singular-Jacobian fixture (constant-mode nullspace) refused by
+MINRES without a projector and solved to the pseudo-solution through
+MINRES, GMRES and BiCGSTAB with `ConstantModeProjector`, the constant-mode
+component of the state preserved; 20 BDF2 steps of `y' = −y` through
+`bdf_step_with(NewtonKrylovSolver(CG))` matching `bdf_step` to 1e-12 and
+MINRES refused inside the step on a DAE declaring nothing; bit-identical
+and JSON-round-trip telemetry plus honest outer-budget exhaustion. Unit
+tests cover configuration/forcing validation and the Eisenstat–Walker
+sequence, floor, and safeguard.
 
 ## E7/SV1-D1 adjoint solve on nonsymmetric operators (W7, 2026-09-01)
 
@@ -56,44 +116,19 @@ orthogonal to the declared nullspace without touching the residual, so
 acceptance stays honest); `solve_gmres`/`solve_bicgstab` signatures are
 unchanged. Conjugate gradient still refuses a projector.
 
-## SV2-B6 Krylov slice
+## Earlier slices (compacted; details in Git history)
 
-MINRES and GMRES over the existing `LinearOperator`/`Preconditioner` traits,
-mirroring conjugate gradient's typed-refusal machinery (typed refusal codes,
-never panics, never a silent fallback). MINRES admits any declared-
-`Symmetric` operator regardless of definiteness (indefinite included — the
-saddle-point Stokes case) and refuses `Nonsymmetric`/`Unknown` declarations
-outright, with no caller-assumption escape hatch (unlike CG). GMRES admits
-any declared symmetry and refuses only a non-square operator. A typed
-`NullspaceProjector` hook lets MINRES proceed on an operator with a declared
-positive nullspace dimension that CG refuses outright: the projector is
-applied to every Krylov vector and to the returned solution, converging to
-the pseudo-solution of a singular consistent system.
-`ConstantModeProjector` is the bounded reference implementation (one
-constant mode over a contiguous coordinate range, e.g. Stokes'
-constant-pressure mode). `CompositeBlockPreconditioner` composes
-caller-supplied per-block `Preconditioner`s block-diagonally — the bounded
-reference contract for Schur-complement/pressure-mass saddle-point
-preconditioning; Methodus does not implement Schur-complement approximation
-itself, only the composition contract. Both solvers report deterministic,
-bit-reproducible `LinearIteration` traces (typed structs, no debug strings).
-Twelve acceptance tests cover the refusal matrix for both solvers, MINRES on
-a symmetric-indefinite saddle-point fixture agreeing with a hand-derived
-solution, MINRES/CG agreement on an SPD fixture, GMRES on a nonsymmetric
-fixture with a known solution, nullspace-projection correctness (a singular
-consistent system solved to the pseudo-solution), telemetry determinism (two
-runs byte-identical), and GMRES restart behavior.
-
-## SV1-C5/D1 transpose and adjoint slice
-
-`TransposeOperator` adapts symmetric-declared linear operators into their
-algebraic transpose by exact delegation (A = Aᵀ under the admitted
-declaration); nonsymmetric or evidence-free declarations are refused because
-the matrix-free contract cannot compute genuine transposes without column
-access. `verify_adjoint_identity` checks <Au,v> == <u,transpose v> on caller
-probes; `transpose_view` is the entry point adjoint solves compose with.
-Two acceptance tests: delegation equality plus identity satisfaction, and
-refusal of Nonsymmetric/Unknown declarations plus dimension-mismatch probes.
+- **SV2-B6 (Methodus `8de32cd`, ratified as GX-CONTRACTS C5.6):** MINRES
+  (declared-`Symmetric` only, any definiteness, `NullspaceProjector` hook)
+  and restarted GMRES (any declared symmetry, square only) with typed
+  refusals and bit-reproducible `LinearIteration` traces;
+  `ConstantModeProjector`; `CompositeBlockPreconditioner` as the
+  block-diagonal composition contract for saddle-point preconditioning
+  (no Schur-complement computation). Twelve acceptance tests.
+- **SV1-C5 / GX-D2 (`6e7fd94`):** `OperatorProperties` (symmetry,
+  definiteness, nullspace dimension, structure hint), `TransposableOperator`
+  with `TransposeOperator::{new, explicit}`, `verify_adjoint_identity`,
+  honest CG refusal of `Indefinite`/nullspace declarations.
 
 ## Current role
 
@@ -132,13 +167,19 @@ The repository is one root package named `methodus`. There are no subordinate co
 - `solve_adjoint`: `Aᵀ λ = g` through `TransposeOperator` (symmetric delegation or explicit
   `TransposableOperator`), property-aware method refusal, true-residual acceptance, typed
   deterministic telemetry including the `TransposeSource`.
+- `solve_newton_krylov`: inexact Newton over `JacobianOperator` (matrix-free JVP with declared
+  `jacobian_properties`) with any `KrylovMethod`, `Constant`/`EisenstatWalker` forcing,
+  sufficient-decrease backtracking, `PreconditionerFactory` and `NullspaceProjector` hooks,
+  and typed per-iteration telemetry; `NonlinearSolver` (`DenseNewton`, `NewtonKrylovSolver`)
+  and `bdf_step_with` let BDF run either solver inside a step.
 - `NullspaceProjector` trait plus the bounded reference `ConstantModeProjector` (one constant mode
   over a contiguous coordinate range).
 - `CompositeBlockPreconditioner`: block-diagonal composition of caller-supplied per-block
   `Preconditioner`s, the bounded reference implementation for Schur-complement/pressure-mass
   saddle-point block preconditioning.
 - Invariant-validated deserialization for CSR matrices, block layouts, preconditioners, and BDF history.
-- Dense Newton correctness baseline with backtracking and residual traces.
+- Dense Newton correctness baseline with backtracking and residual traces
+  (still the default inside `bdf_step` and `solve_blocks`).
 - Rectangular `LeastSquaresOperator`, deterministic damped Gauss-Newton solve,
   and centered-difference full-Jacobian verification.
 - Monolithic, block Gauss-Seidel, and block Jacobi nonlinear strategies.
@@ -158,14 +199,11 @@ The repository is one root package named `methodus`. There are no subordinate co
 
 ## Extraction
 
-- Created from Solverang history at numerical-core head `2bf2ee5` and renamed
-  directly, without a forwarding package or compatibility facade.
-- Solverang retains its history and now consumes Methodus while owning the
-  generalized constraint engine and 2-D/3-D geometry vocabularies.
-- Historical mixed CAD/scientific/JIT/pipeline code remains available in Git
-  history but was not restored into Methodus.
-
-This is an intentional API break. No compatibility types, feature aliases, or forwarding packages remain.
+Created from Solverang history at numerical-core head `2bf2ee5` and renamed
+directly, without a forwarding package or compatibility facade; Solverang
+now consumes Methodus. Historical mixed CAD/scientific/JIT/pipeline code
+remains in Git history only. This was an intentional API break with no
+compatibility types, feature aliases, or forwarding packages.
 
 ## Dependency contract
 
@@ -176,12 +214,14 @@ This is an intentional API break. No compatibility types, feature aliases, or fo
 
 ## Validation
 
-Validated locally on 2026-09-01 (E7/SV1-D1 adjoint slice):
+Validated locally on 2026-09-01 (E7/SV1-D1 adjoint slice and the
+Newton–Krylov driver):
 
 - formatting and all-target checks passed;
 - warnings-denied Clippy passed;
-- 83 tests passed (62 unit, 21 integration), 0 failed;
-- warnings-denied rustdoc passed; doctests passed (0 doctests present).
+- 93 tests passed (64 unit, 29 integration), 0 failed;
+- warnings-denied rustdoc passed; doctests passed (0 doctests present);
+- `git diff --check` passed.
 
 Prior validation (2026-08-31, SV2-B6 slice, 65 tests): formatting, locked
 all-target checks, warnings-denied Clippy, warnings-denied rustdoc/doctests,
@@ -191,12 +231,8 @@ Prior validation (2026-08-24, 31 tests): formatting, locked all-target
 checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
 `git diff --check` all passed.
 
-## Known limits (updated after the SV2-B6 slice)
+## Known limits (updated after the W7 lane-3 slices)
 
-- `OperatorProperties` (symmetry, definiteness, nullspace dimension, and a
-  dense/block `OperatorStructureHint` with a saddle-point flag) landed under
-  GX-D2 before this slice; the three-valued-symmetry-only limit an earlier
-  2026-08-30 audit recorded here is resolved.
 - A transpose exists only by `Symmetric` delegation or an explicit
   `TransposableOperator`; Finitum's matrix-free operators implement neither
   today, so `solve_adjoint` is usable on `CsrMatrix`-shaped assembled
@@ -217,6 +253,17 @@ checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
   its own approximate Schur-complement/pressure-mass block preconditioner.
 - BiCGSTAB has no restart or look-ahead; a Lanczos breakdown is a typed
   error, and a caller wanting robustness against it selects GMRES.
+- Newton–Krylov requires the operator's own JVP; there is no
+  finite-difference Jacobian-free fallback (a JVP is part of every Methodus
+  nonlinear contract). Globalization is backtracking only (no trust region),
+  and a residual already at its floating-point floor fails the sufficient-
+  decrease test as `LineSearchFailed` rather than being declared converged
+  — callers set the outer tolerance above `‖J‖·‖x‖·ε`.
+- `solve_blocks` (Gauss–Seidel/Jacobi) still builds dense per-block
+  Jacobians by JVP column probing; a block-aware Newton–Krylov (per-block
+  Krylov solves inside the staggered update) is not implemented.
+- `bdf_step_with` ignores `config.newton`; the nonlinear policy lives in the
+  supplied `NonlinearSolver`. `BdfConfig`'s serialized shape is unchanged.
 - MINRES's nullspace-projection hook ships one bounded reference
   implementation, `ConstantModeProjector` (a single constant mode over one
   contiguous coordinate range). Multi-dimensional nullspaces (e.g.
@@ -232,16 +279,21 @@ checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
    constraint systems and independent numerical checks.
 3. Replace dense Newton only after representative compiled systems define
    scaling and performance requirements.
-4. W7 lane 3, next package: an inexact Newton–Krylov driver over a
-   matrix-free JVP operator with a pluggable `KrylovMethod`, a preconditioner
-   hook, and a nullspace-projector hook (today `solve_newton` builds a dense
-   Jacobian by JVP column probing), needed by Krasis's N-block DAE with Newton
-   inside BDF (batch P) and SC-W3.
+4. Done (W7 lane 3, this slice): the inexact Newton–Krylov driver with
+   `KrylovMethod`, `PreconditionerFactory`, and `NullspaceProjector` hooks,
+   plus `bdf_step_with`/`NonlinearSolver` for Krasis's Newton inside BDF.
+   Krasis wires `NewtonKrylovSolver` into its DAE transactions when batch P
+   needs it; Sinbad resolves policy into `KrylovMethod`/`NewtonKrylovConfig`.
 5. SC composition (design `sinbad/ARCHITECTURE.md` §8–9; the SV7-F3 subset
    pulled forward under its own ID): fixed-point acceleration over `&[f64]`
-   iterate sequences (relaxation, Aitken; IQN later). `solve_blocks`
-   GS/Jacobi and `CompositeBlockPreconditioner` are reused as they are.
-   Methodus never sees instance names, outputs, or connector vocabulary;
-   Sinbad resolves schedules and convergence targets to block ids.
+   iterate sequences (relaxation, Aitken; IQN later), and a block-aware
+   Newton–Krylov if `solve_blocks`'s dense per-block Jacobians become the
+   bottleneck. `CompositeBlockPreconditioner` is reused as it is. Methodus
+   never sees instance names, outputs, or connector vocabulary; Sinbad
+   resolves schedules and convergence targets to block ids.
+6. Block-preconditioner contracts beyond block-diagonal composition
+   (Schur-complement/pressure-mass approximations as traits with a dense
+   reference) only when a Finitum or Krasis case demonstrates the need; none
+   surfaced in `ARCHITECTURE.md` §6/§9 during W7.
 
 Blockers: none.

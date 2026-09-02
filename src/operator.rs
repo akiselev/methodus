@@ -224,6 +224,14 @@ pub trait Preconditioner: Send + Sync {
 /// In-place residual and Jacobian-vector products for `F(x) = 0`.
 pub trait NonlinearOperator: Send + Sync {
     fn dimension(&self) -> usize;
+    /// Declared properties of the Jacobian `∂F/∂x`, valid at every state
+    /// the operator admits, used by Newton–Krylov to admit or refuse a
+    /// linear method exactly as [`LinearOperator::properties`] does. The
+    /// default makes no claim (`Unknown` symmetry), which conjugate gradient
+    /// refuses without an explicit assumption and MINRES refuses outright.
+    fn jacobian_properties(&self) -> OperatorProperties {
+        OperatorProperties::default()
+    }
     fn residual(
         &self,
         context: &EvaluationContext,
@@ -242,6 +250,13 @@ pub trait NonlinearOperator: Send + Sync {
 /// In-place residual and directional derivatives for `F(t, y, ydot) = 0`.
 pub trait DaeOperator: Send + Sync {
     fn dimension(&self) -> usize;
+    /// Declared properties of the implicit-step Jacobian
+    /// `∂F/∂y + α ∂F/∂ẏ` for every `α > 0` a BDF step may form, valid at
+    /// every admitted state; see [`NonlinearOperator::jacobian_properties`].
+    /// The default makes no claim.
+    fn jacobian_properties(&self) -> OperatorProperties {
+        OperatorProperties::default()
+    }
     fn residual(
         &self,
         context: &EvaluationContext,

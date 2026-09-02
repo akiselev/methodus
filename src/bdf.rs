@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use crate::nonlinear::{DenseNewton, NonlinearSolver};
 use crate::{
-    DaeOperator, EvaluationContext, NewtonConfig, NonlinearOperator, NumericError, SolveError,
-    solve_newton,
+    DaeOperator, EvaluationContext, NewtonConfig, NonlinearOperator, NumericError,
+    OperatorProperties, SolveError,
 };
 
 /// Backward differentiation formula order.
@@ -150,13 +151,41 @@ pub enum StepOutcome {
     Rejected(RejectedStep),
 }
 
-/// Attempt one implicit BDF1 or BDF2 step.
+/// Attempt one implicit BDF1 or BDF2 step with dense Newton
+/// (`config.newton`) as the implicit solve.
 pub fn bdf_step(
     operator: &(impl DaeOperator + ?Sized),
     context: &EvaluationContext,
     state: &BdfState,
     step: f64,
     config: &BdfConfig,
+) -> Result<StepOutcome, SolveError> {
+    bdf_step_with(
+        operator,
+        context,
+        state,
+        step,
+        config,
+        &DenseNewton::new(&config.newton),
+    )
+}
+
+/// Attempt one implicit BDF1 or BDF2 step with a caller-supplied
+/// [`NonlinearSolver`] for the implicit solve (for example a
+/// [`crate::NewtonKrylovSolver`] over the step's matrix-free Jacobian).
+///
+/// `config.newton` is not consulted: the supplied solver owns the nonlinear
+/// policy. Everything else in `config` (order, error control, step limits)
+/// applies unchanged, and the implicit operator handed to the solver
+/// forwards [`DaeOperator::jacobian_properties`] so property-aware linear
+/// admission works inside the step.
+pub fn bdf_step_with(
+    operator: &(impl DaeOperator + ?Sized),
+    context: &EvaluationContext,
+    state: &BdfState,
+    step: f64,
+    config: &BdfConfig,
+    solver: &dyn NonlinearSolver,
 ) -> Result<StepOutcome, SolveError> {
     validate_step(operator, state, step, config)?;
     let next_time = state.time + step;
@@ -173,14 +202,14 @@ pub fn bdf_step(
                 Some((previous, previous_step)),
                 step,
                 next_time,
-                config,
+                solver,
             )?;
-            let first = implicit_step(operator, context, state, None, step, next_time, config)?;
+            let first = implicit_step(operator, context, state, None, step, next_time, solver)?;
             let error = scaled_error(&second, &first, config)?;
             (second, error)
         }
         _ => (
-            implicit_step(operator, context, state, None, step, next_time, config)?,
+            implicit_step(operator, context, state, None, step, next_time, solver)?,
             0.0,
         ),
     };
@@ -292,7 +321,7 @@ fn implicit_step(
     previous: Option<(&[f64], f64)>,
     step: f64,
     next_time: f64,
-    config: &BdfConfig,
+    solver: &dyn NonlinearSolver,
 ) -> Result<Vec<f64>, SolveError> {
     struct ImplicitOperator<'a, Operator: DaeOperator + ?Sized> {
         operator: &'a Operator,
@@ -305,6 +334,10 @@ fn implicit_step(
     impl<Operator: DaeOperator + ?Sized> NonlinearOperator for ImplicitOperator<'_, Operator> {
         fn dimension(&self) -> usize {
             self.operator.dimension()
+        }
+
+        fn jacobian_properties(&self) -> OperatorProperties {
+            self.operator.jacobian_properties()
         }
 
         fn residual(
@@ -350,7 +383,7 @@ fn implicit_step(
         step,
         next_time,
     };
-    let report = solve_newton(&implicit, context, &state.values, &config.newton)?;
+    let report = solver.solve(&implicit, context, &state.values)?;
     if report.converged {
         Ok(report.state)
     } else {

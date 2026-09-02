@@ -14,6 +14,7 @@ mod krylov;
 mod krylov_method;
 mod least_squares;
 mod linear;
+mod newton_krylov;
 mod nonlinear;
 mod nullspace;
 mod operator;
@@ -25,6 +26,7 @@ mod verification;
 pub use adjoint::{AdjointConfig, AdjointSolveReport, ResidualAcceptance, solve_adjoint};
 pub use bdf::{
     AcceptedStep, BdfConfig, BdfOrder, BdfState, LocatedEvent, RejectedStep, StepOutcome, bdf_step,
+    bdf_step_with,
 };
 pub use block::{
     Block, BlockLayout, BlockLinearOperator, BlockNonlinearOperator, BlockPreconditioner, BlockSpec,
@@ -44,8 +46,13 @@ pub use linear::{
     ConjugateGradientConfig, ConjugateGradientSymmetryPolicy, LinearIteration, LinearSolveReport,
     solve_conjugate_gradient,
 };
+pub use newton_krylov::{
+    ForcingPolicy, JacobianOperator, LinearStepSummary, NewtonKrylovConfig, NewtonKrylovIteration,
+    NewtonKrylovReport, NewtonKrylovSolver, PreconditionerFactory, solve_newton_krylov,
+};
 pub use nonlinear::{
-    BlockStrategy, IterationTrace, NewtonConfig, SolveReport, solve_blocks, solve_newton,
+    BlockStrategy, DenseNewton, IterationTrace, NewtonConfig, NonlinearSolver, SolveReport,
+    solve_blocks, solve_newton,
 };
 pub use nullspace::{ConstantModeProjector, NullspaceProjector};
 pub use operator::{
