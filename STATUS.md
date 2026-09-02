@@ -38,8 +38,10 @@ exhausted outer budget is `converged == false`.
 For Krasis's Newton-inside-BDF (batch P): `NonlinearSolver` is a
 `Send + Sync` trait with `solve(&dyn NonlinearOperator, context, initial)`;
 `DenseNewton` wraps `solve_newton`, `NewtonKrylovSolver` wraps
-`solve_newton_krylov`; `bdf_step_with(operator, context, state, step,
-config, solver: &dyn NonlinearSolver)` runs a BDF1/BDF2 attempt with the
+`solve_newton_krylov`, and `BlockNewton::new(&BlockLayout, BlockStrategy,
+&NewtonConfig)` wraps `solve_blocks` (Gauss–Seidel/Jacobi/monolithic) so a
+partitioned iteration can run inside a step; `bdf_step_with(operator,
+context, state, step, config, solver: &dyn NonlinearSolver)` runs a BDF1/BDF2 attempt with the
 supplied solver (`config.newton` is then not consulted), and the implicit
 operator forwards `DaeOperator::jacobian_properties`. `bdf_step` is
 unchanged in signature and behaviour (`bdf_step_with` over `DenseNewton`).
@@ -61,7 +63,11 @@ MINRES without a projector and solved to the pseudo-solution through
 MINRES, GMRES and BiCGSTAB with `ConstantModeProjector`, the constant-mode
 component of the state preserved; 20 BDF2 steps of `y' = −y` through
 `bdf_step_with(NewtonKrylovSolver(CG))` matching `bdf_step` to 1e-12 and
-MINRES refused inside the step on a DAE declaring nothing; bit-identical
+MINRES refused inside the step on a DAE declaring nothing; 10 BDF2 steps of
+a two-block coupled decay through `BlockNewton` Gauss–Seidel and Jacobi
+matching the dense path to 1e-11 with a mismatched layout refused; a fixed
+`&dyn Preconditioner` serving as the factory hook (`impl PreconditionerFactory
+for &P`) with a dimension mismatch refused; bit-identical
 and JSON-round-trip telemetry plus honest outer-budget exhaustion. Unit
 tests cover configuration/forcing validation and the Eisenstat–Walker
 sequence, floor, and safeguard.
@@ -132,12 +138,11 @@ unchanged. Conjugate gradient still refuses a projector.
 
 ## Current role
 
-Methodus owns consumer-neutral numerical contracts and algorithms. It operates
-on flat `f64` slices and explicit operator actions. It must not understand
-constraints, `.res`, dimensions or units, fields, materials, geometry,
-function spaces, meshes, element kernels, or product/runtime policy.
-
-The repository is one root package named `methodus`. There are no subordinate contracts, scientific, or macro packages.
+Methodus owns consumer-neutral numerical contracts and algorithms over flat
+`f64` slices and explicit operator actions; it must not understand
+constraints, `.res`, units, fields, materials, geometry, function spaces,
+meshes, element kernels, or product/runtime policy. The repository is one
+root package named `methodus` with no subordinate packages.
 
 ## Implemented surface
 
@@ -170,8 +175,9 @@ The repository is one root package named `methodus`. There are no subordinate co
 - `solve_newton_krylov`: inexact Newton over `JacobianOperator` (matrix-free JVP with declared
   `jacobian_properties`) with any `KrylovMethod`, `Constant`/`EisenstatWalker` forcing,
   sufficient-decrease backtracking, `PreconditionerFactory` and `NullspaceProjector` hooks,
-  and typed per-iteration telemetry; `NonlinearSolver` (`DenseNewton`, `NewtonKrylovSolver`)
-  and `bdf_step_with` let BDF run either solver inside a step.
+  and typed per-iteration telemetry; `NonlinearSolver` (`DenseNewton`, `NewtonKrylovSolver`,
+  `BlockNewton`) and `bdf_step_with` let BDF run any of them inside a step; a fixed
+  `&dyn Preconditioner` is accepted as a `PreconditionerFactory`.
 - `NullspaceProjector` trait plus the bounded reference `ConstantModeProjector` (one constant mode
   over a contiguous coordinate range).
 - `CompositeBlockPreconditioner`: block-diagonal composition of caller-supplied per-block
@@ -187,15 +193,11 @@ The repository is one root package named `methodus`. There are no subordinate co
 - BDF1 and variable-step BDF2 implicit stepping with error-based rejection, consistent initialization, serializable step-size history, restart identity, and zero-crossing events.
 - Checked dimension, capacity, time, and accepted-step arithmetic on fallible solver paths.
 - Centered-difference checks for nonlinear and DAE Jacobian-vector products.
-- Reusable directional Taylor-remainder, centered-difference, and callback-based
-  complex-step reports over caller-supplied numerical evaluations.
-- Convergence-order estimation from strictly refined positive samples, with
-  adjacent orders and a log-space least-squares fit.
-- Common-grid trajectory max/trapezoidal-L2 norms, tolerance-based
-  solve-strategy agreement, and deterministic per-category work-budget checks.
-- Malformed dimensions, non-monotone sample sequences, invalid tolerances,
-  non-finite values, and floating-point overflow in computed discrepancies are
-  refused rather than converted into passing evidence.
+- Verification utilities: directional Taylor-remainder, centered-difference, and
+  callback-based complex-step reports; convergence-order estimation; trajectory
+  max/trapezoidal-L2 norms; solve-strategy agreement; deterministic work-budget
+  checks. Malformed inputs and overflowed discrepancies are refused, never
+  converted into passing evidence.
 
 ## Extraction
 
@@ -207,10 +209,10 @@ compatibility types, feature aliases, or forwarding packages.
 
 ## Dependency contract
 
-- Krasis implements `NonlinearOperator`, `DaeOperator`, and `BlockNonlinearOperator` for coupled state.
-- Finitum may implement `LinearOperator` for realized discrete operators.
-- Solverang implements `LeastSquaresOperator` for its constraint graph.
-- Methodus has no dependencies on any scientific-stack repository.
+Krasis implements `NonlinearOperator`/`DaeOperator`/`BlockNonlinearOperator`;
+Finitum implements `LinearOperator` (and `TransposableOperator` where it has a
+transpose); Solverang implements `LeastSquaresOperator`. Methodus depends on no
+scientific-stack repository.
 
 ## Validation
 
@@ -219,7 +221,7 @@ Newton–Krylov driver):
 
 - formatting and all-target checks passed;
 - warnings-denied Clippy passed;
-- 93 tests passed (64 unit, 29 integration), 0 failed;
+- 95 tests passed (64 unit, 31 integration), 0 failed;
 - warnings-denied rustdoc passed; doctests passed (0 doctests present);
 - `git diff --check` passed.
 
@@ -259,9 +261,10 @@ checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
   and a residual already at its floating-point floor fails the sufficient-
   decrease test as `LineSearchFailed` rather than being declared converged
   — callers set the outer tolerance above `‖J‖·‖x‖·ε`.
-- `solve_blocks` (Gauss–Seidel/Jacobi) still builds dense per-block
-  Jacobians by JVP column probing; a block-aware Newton–Krylov (per-block
-  Krylov solves inside the staggered update) is not implemented.
+- `solve_blocks` (Gauss–Seidel/Jacobi, also as `BlockNewton` inside BDF)
+  still builds dense per-block Jacobians by JVP column probing; a
+  block-aware Newton–Krylov (per-block Krylov solves inside the staggered
+  update) is not implemented.
 - `bdf_step_with` ignores `config.newton`; the nonlinear policy lives in the
   supplied `NonlinearSolver`. `BdfConfig`'s serialized shape is unchanged.
 - MINRES's nullspace-projection hook ships one bounded reference

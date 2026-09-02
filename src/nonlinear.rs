@@ -97,6 +97,89 @@ impl NonlinearSolver for DenseNewton<'_> {
     }
 }
 
+/// [`solve_blocks`] as a [`NonlinearSolver`]: partitioned Gauss–Seidel,
+/// Jacobi, or monolithic dense Newton over a caller-supplied
+/// [`BlockLayout`], so a partitioned iteration can run inside a BDF step
+/// (`bdf_step_with`) whose implicit operator carries no layout of its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockNewton<'a> {
+    layout: &'a BlockLayout,
+    strategy: BlockStrategy,
+    config: &'a NewtonConfig,
+}
+
+impl<'a> BlockNewton<'a> {
+    #[must_use]
+    pub const fn new(
+        layout: &'a BlockLayout,
+        strategy: BlockStrategy,
+        config: &'a NewtonConfig,
+    ) -> Self {
+        Self {
+            layout,
+            strategy,
+            config,
+        }
+    }
+}
+
+/// Attaches a block layout to a layout-less nonlinear operator.
+struct LayoutView<'a> {
+    inner: &'a dyn NonlinearOperator,
+    layout: &'a BlockLayout,
+}
+
+impl NonlinearOperator for LayoutView<'_> {
+    fn dimension(&self) -> usize {
+        self.inner.dimension()
+    }
+
+    fn jacobian_properties(&self) -> crate::OperatorProperties {
+        self.inner.jacobian_properties()
+    }
+
+    fn residual(
+        &self,
+        context: &EvaluationContext,
+        state: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        self.inner.residual(context, state, output)
+    }
+
+    fn jacobian_vector_product(
+        &self,
+        context: &EvaluationContext,
+        state: &[f64],
+        direction: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        self.inner
+            .jacobian_vector_product(context, state, direction, output)
+    }
+}
+
+impl BlockNonlinearOperator for LayoutView<'_> {
+    fn block_layout(&self) -> &BlockLayout {
+        self.layout
+    }
+}
+
+impl NonlinearSolver for BlockNewton<'_> {
+    fn solve(
+        &self,
+        operator: &dyn NonlinearOperator,
+        context: &EvaluationContext,
+        initial_state: &[f64],
+    ) -> Result<SolveReport, SolveError> {
+        let view = LayoutView {
+            inner: operator,
+            layout: self.layout,
+        };
+        solve_blocks(&view, context, initial_state, self.strategy, self.config)
+    }
+}
+
 /// Solve an unpartitioned nonlinear system with dense Newton updates.
 pub fn solve_newton(
     operator: &(impl NonlinearOperator + ?Sized),

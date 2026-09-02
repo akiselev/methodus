@@ -51,8 +51,8 @@ pub use newton_krylov::{
     NewtonKrylovReport, NewtonKrylovSolver, PreconditionerFactory, solve_newton_krylov,
 };
 pub use nonlinear::{
-    BlockStrategy, DenseNewton, IterationTrace, NewtonConfig, NonlinearSolver, SolveReport,
-    solve_blocks, solve_newton,
+    BlockNewton, BlockStrategy, DenseNewton, IterationTrace, NewtonConfig, NonlinearSolver,
+    SolveReport, solve_blocks, solve_newton,
 };
 pub use nullspace::{ConstantModeProjector, NullspaceProjector};
 pub use operator::{

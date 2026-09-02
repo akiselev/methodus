@@ -118,6 +118,42 @@ pub trait PreconditionerFactory: Send + Sync {
     ) -> Result<Option<Box<dyn Preconditioner + 'a>>, NumericError>;
 }
 
+/// A fixed [`Preconditioner`] used as a [`PreconditionerFactory`]: the
+/// same approximate inverse at every Newton iterate (a caller that has one
+/// good state-independent preconditioner passes `&preconditioner`).
+impl<P: Preconditioner + ?Sized> PreconditionerFactory for &P {
+    fn build<'a>(
+        &'a self,
+        _context: &EvaluationContext,
+        jacobian: &dyn LinearOperator,
+        _state: &[f64],
+    ) -> Result<Option<Box<dyn Preconditioner + 'a>>, NumericError> {
+        NumericError::require_len(
+            "fixed Newton–Krylov preconditioner",
+            self.dimension(),
+            jacobian.rows(),
+        )?;
+        Ok(Some(Box::new(Borrowed(*self))))
+    }
+}
+
+struct Borrowed<'a, P: Preconditioner + ?Sized>(&'a P);
+
+impl<P: Preconditioner + ?Sized> Preconditioner for Borrowed<'_, P> {
+    fn dimension(&self) -> usize {
+        self.0.dimension()
+    }
+
+    fn apply_inverse(
+        &self,
+        context: &EvaluationContext,
+        right_hand_side: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        self.0.apply_inverse(context, right_hand_side, output)
+    }
+}
+
 /// How the forcing term `η_k` (the relative tolerance of the `k`-th inner
 /// linear solve, `‖F_k + J_k s_k‖ ≤ η_k ‖F_k‖`) is chosen.
 ///

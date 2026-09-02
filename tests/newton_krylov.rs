@@ -800,3 +800,179 @@ fn newton_krylov_telemetry_is_bit_reproducible_and_exhaustion_is_reported_honest
     assert_eq!(exhausted.trace.len(), 2);
     assert!(exhausted.trace.last().unwrap().linear.is_none());
 }
+
+/// Two weakly coupled decays `y₀' = −y₀ + c y₁`, `y₁' = −y₁ + c y₀` as a
+/// two-block DAE without a layout of its own.
+struct CoupledDecay {
+    coupling: f64,
+}
+
+impl DaeOperator for CoupledDecay {
+    fn dimension(&self) -> usize {
+        2
+    }
+    fn residual(
+        &self,
+        _context: &EvaluationContext,
+        _time: f64,
+        state: &[f64],
+        state_rate: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        output[0] = state_rate[0] + state[0] - self.coupling * state[1];
+        output[1] = state_rate[1] + state[1] - self.coupling * state[0];
+        Ok(())
+    }
+    fn jacobian_vector_product(
+        &self,
+        _context: &EvaluationContext,
+        _time: f64,
+        _state: &[f64],
+        _state_rate: &[f64],
+        state_direction: &[f64],
+        rate_direction: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        output[0] = rate_direction[0] + state_direction[0] - self.coupling * state_direction[1];
+        output[1] = rate_direction[1] + state_direction[1] - self.coupling * state_direction[0];
+        Ok(())
+    }
+}
+
+#[test]
+fn partitioned_block_newton_runs_inside_a_bdf_step_and_matches_the_dense_path() {
+    use methodus::{BlockLayout, BlockNewton, BlockSpec, BlockStrategy};
+
+    let context = EvaluationContext::reproducible();
+    let operator = CoupledDecay { coupling: 0.3 };
+    let layout = BlockLayout::new(vec![
+        BlockSpec {
+            name: "first".into(),
+            length: 1,
+            residual_scale: 1.0,
+        },
+        BlockSpec {
+            name: "second".into(),
+            length: 1,
+            residual_scale: 1.0,
+        },
+    ])
+    .unwrap();
+    let newton = NewtonConfig {
+        absolute_tolerance: 1.0e-13,
+        relative_tolerance: 0.0,
+        max_iterations: 200,
+        ..NewtonConfig::default()
+    };
+    let config = BdfConfig {
+        order: BdfOrder::Two,
+        relative_tolerance: 1.0e12,
+        absolute_tolerance: 1.0e12,
+        newton: newton.clone(),
+        ..BdfConfig::default()
+    };
+    let step = 0.05;
+    let initial = BdfState::initialize(&operator, &context, 0.0, vec![1.0, -0.5]).unwrap();
+    let mut dense = initial.clone();
+    let mut gauss_seidel_state = initial.clone();
+    let mut jacobi_state = initial;
+    let gauss_seidel = BlockNewton::new(&layout, BlockStrategy::GaussSeidel, &newton);
+    let jacobi = BlockNewton::new(&layout, BlockStrategy::Jacobi, &newton);
+    for _ in 0..10 {
+        let accept = |outcome: StepOutcome| match outcome {
+            StepOutcome::Accepted(accepted) => accepted.state,
+            StepOutcome::Rejected(_) => panic!("fixed-step run must not reject"),
+        };
+        dense = accept(bdf_step(&operator, &context, &dense, step, &config).unwrap());
+        gauss_seidel_state = accept(
+            bdf_step_with(
+                &operator,
+                &context,
+                &gauss_seidel_state,
+                step,
+                &config,
+                &gauss_seidel,
+            )
+            .unwrap(),
+        );
+        jacobi_state = accept(
+            bdf_step_with(&operator, &context, &jacobi_state, step, &config, &jacobi).unwrap(),
+        );
+    }
+    for partitioned in [&gauss_seidel_state, &jacobi_state] {
+        assert_eq!(partitioned.time, dense.time);
+        for (a, b) in partitioned.values.iter().zip(&dense.values) {
+            assert!((a - b).abs() < 1.0e-11, "{a} vs {b}");
+        }
+    }
+    // A layout that does not match the operator dimension is refused.
+    let wrong = BlockLayout::new(vec![BlockSpec {
+        name: "only".into(),
+        length: 3,
+        residual_scale: 1.0,
+    }])
+    .unwrap();
+    let mismatched = BlockNewton::new(&wrong, BlockStrategy::GaussSeidel, &newton);
+    let error = bdf_step_with(&operator, &context, &dense, step, &config, &mismatched).unwrap_err();
+    assert!(matches!(error, SolveError::InvalidLayout { .. }));
+}
+
+/// Diagonal inverse used as a fixed (state-independent) preconditioner.
+struct DiagonalInverse(Vec<f64>);
+
+impl Preconditioner for DiagonalInverse {
+    fn dimension(&self) -> usize {
+        self.0.len()
+    }
+    fn apply_inverse(
+        &self,
+        _context: &EvaluationContext,
+        right_hand_side: &[f64],
+        output: &mut [f64],
+    ) -> Result<(), NumericError> {
+        for ((output, value), diagonal) in output.iter_mut().zip(right_hand_side).zip(&self.0) {
+            *output = value / diagonal;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_fixed_preconditioner_serves_as_the_factory_hook() {
+    let problem = ReactionDiffusion {
+        interior: 40,
+        convection: 8.0,
+    };
+    let context = EvaluationContext::reproducible();
+    let initial = vec![0.0; problem.interior];
+    let h = problem.spacing();
+    let fixed = DiagonalInverse(vec![2.0 / (h * h); problem.interior]);
+    let report = solve_newton_krylov(
+        &problem,
+        &context,
+        &initial,
+        &tight_gmres(),
+        Some(&&fixed),
+        None,
+        &exact_newton_config(PDE_TARGET),
+    )
+    .unwrap();
+    assert!(report.converged, "{:?}", report.trace);
+    assert_pde_quadratic(&report);
+
+    let wrong_size = DiagonalInverse(vec![1.0; 3]);
+    let error = solve_newton_krylov(
+        &problem,
+        &context,
+        &initial,
+        &tight_gmres(),
+        Some(&&wrong_size),
+        None,
+        &exact_newton_config(PDE_TARGET),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        SolveError::Numeric(NumericError::DimensionMismatch { .. })
+    ));
+}
