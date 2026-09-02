@@ -155,12 +155,19 @@ checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
 
 ## Next concrete work
 
-1. Wire MINRES/GMRES into Sinbad's `SolvePolicy`/`LinearAlgorithm`
-   admission once Sinbad picks up SV2-B6 (Methodus does not own that
-   selection policy).
+1. Done (Sinbad C11.17, `35f4e2a`): MINRES/GMRES are wired into Sinbad's
+   `SolvePolicy`/`LinearAlgorithm` admission; Methodus did not own that
+   selection policy and did not change.
 2. Promote the dense least-squares baseline only from representative Solverang
    constraint systems and independent numerical checks.
 3. Replace dense Newton only after representative compiled systems define
    scaling and performance requirements.
+4. SC composition (design `sinbad/ARCHITECTURE.md` §8–9; the SV7-F3 subset
+   pulled forward under its own ID): an inexact Newton–Krylov driver (today
+   `solve_newton` builds a dense Jacobian by JVP column probing) and fixed-point
+   acceleration over `&[f64]` iterate sequences (relaxation, Aitken; IQN later).
+   `solve_blocks` GS/Jacobi and `CompositeBlockPreconditioner` are reused as they
+   are. Methodus never sees instance names, outputs, or connector vocabulary;
+   Sinbad resolves schedules and convergence targets to block ids.
 
 Blockers: none.
