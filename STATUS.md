@@ -7,6 +7,18 @@ and the inexact Newton–Krylov driver with preconditioner/nullspace hooks
 (previously: SV2-B6 MINRES/GMRES, nullspace projection, and block
 preconditioner contracts; SV0-B1 checkers; SV1-C5 transposes)
 
+## W8: typed evaluation failure through every algorithm (coordinator, 2026-09-07)
+
+`NumericError::Evaluation { code, origin, message }` (Display `"<code> at <origin>: <message>"`,
+`evaluation_code()`): the variant an operator raises when a callback it evaluates — a
+constitutive law, an external input, a sampled datum — fails with its producer's own refusal
+code. Every Methodus algorithm already returns operator errors unchanged, so the variant reaches
+the caller verbatim (`SolveError::Numeric` is transparent). Physics-neutral: Methodus never
+interprets `code` or `origin`. Consumers: Finitum F2 maps `FinitumError::InputEvaluation` to it
+at its `map_err(.. NumericError::Operator { message })` sites; Krasis passes it through
+unchanged (workspace `PLAN.md` §6 W8 decision 3, GX-CONTRACTS C12.9 follow-on 6). Additive; no
+existing variant, digest or behaviour changed. Unit test in `src/error.rs`.
+
 ## E7/SC-W3 inexact Newton–Krylov driver (W7, 2026-09-01)
 
 `solve_newton_krylov` solves `F(x) = 0` by inexact Newton over a matrix-free
