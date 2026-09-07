@@ -298,5 +298,10 @@ checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
    (Schur-complement/pressure-mass approximations as traits with a dense
    reference) only when a Finitum or Krasis case demonstrates the need; none
    surfaced in `ARCHITECTURE.md` §6/§9 during W7.
+   **Consumer named 2026-09-07:** workspace `PLAN.md` §6 "W8" decision 6 makes SC-W3 the
+   consumer — Sinbad's `PreconditionerPolicy` grows beyond `None`, Sinbad consumes
+   `NewtonKrylovSolver` + `PreconditionerFactory`, and the transient product path drops its dense
+   monolithic Newton Jacobian (kept only as the agreement oracle). The Schur/pressure-mass
+   contracts start when the SC-W3 Methodus lane is launched, not before.
 
 Blockers: none.
