@@ -391,6 +391,62 @@ fn implicit_step(
     }
 }
 
+/// Reconstructs the numerical rate used by a BDF candidate from its **pre-step** state.
+///
+/// Pass the saved state from before `bdf_step`/`bdf_step_with`, the accepted candidate values,
+/// attempted step, and the same configured order. Order two uses unequal-step history when
+/// present and bootstraps with order one otherwise. This is the same derivative routine used
+/// inside the implicit residual; it does not evaluate the operator or alter integration state.
+/// The result uses the same coordinates as the supplied state and candidate.
+///
+/// # Errors
+/// Refuses nonfinite values, mismatched lengths, incomplete history, nonpositive steps,
+/// unrepresentable time advancement, and nonfinite derivative coefficients/results.
+pub fn bdf_candidate_rate(
+    state: &BdfState,
+    candidate: &[f64],
+    step: f64,
+    order: BdfOrder,
+) -> Result<Vec<f64>, NumericError> {
+    NumericError::require_len("BDF candidate", candidate.len(), state.values.len())?;
+    NumericError::require_finite("BDF candidate", candidate)?;
+    NumericError::require_finite("BDF committed state", &state.values)?;
+    if !state.time.is_finite()
+        || !step.is_finite()
+        || step <= 0.0
+        || !(state.time + step).is_finite()
+        || state.time + step <= state.time
+    {
+        return Err(NumericError::InvalidInput {
+            message: "BDF rate requires a positive step advancing finite time".into(),
+        });
+    }
+    let history = match (&state.previous_values, state.previous_step) {
+        (Some(previous), Some(previous_step)) => {
+            NumericError::require_len("BDF previous state", previous.len(), state.values.len())?;
+            NumericError::require_finite("BDF previous state", previous)?;
+            if !previous_step.is_finite() || previous_step <= 0.0 {
+                return Err(NumericError::InvalidInput {
+                    message: "BDF previous step must be finite and positive".into(),
+                });
+            }
+            Some((previous.as_slice(), previous_step))
+        }
+        (None, None) => None,
+        _ => {
+            return Err(NumericError::InvalidInput {
+                message: "BDF previous values and step must both be present or absent".into(),
+            });
+        }
+    };
+    let previous = if order == BdfOrder::Two {
+        history
+    } else {
+        None
+    };
+    bdf_derivative(candidate, state, previous, step).map(|(rate, _)| rate)
+}
+
 fn bdf_derivative(
     values: &[f64],
     state: &BdfState,

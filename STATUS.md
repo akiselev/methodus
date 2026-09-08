@@ -1,152 +1,29 @@
 # Methodus status
 
-Updated: 2026-09-01
+Updated: 2026-09-08
 Branch: `master`
-Milestone: W7 lane 3 — E7/SV1-D1 adjoint solve on nonsymmetric operators
-and the inexact Newton–Krylov driver with preconditioner/nullspace hooks
-(previously: SV2-B6 MINRES/GMRES, nullspace projection, and block
-preconditioner contracts; SV0-B1 checkers; SV1-C5 transposes)
+Milestone: W8 accepted-candidate BDF rate reporting (working tree); existing numerical
+algorithms, serialized state and execution behavior unchanged.
 
-## W8: typed evaluation failure through every algorithm (coordinator, 2026-09-07)
+## W8 BDF candidate-rate API
 
-`NumericError::Evaluation { code, origin, message }` (Display `"<code> at <origin>: <message>"`,
-`evaluation_code()`): the variant an operator raises when a callback it evaluates — a
-constitutive law, an external input, a sampled datum — fails with its producer's own refusal
-code. Every Methodus algorithm already returns operator errors unchanged, so the variant reaches
-the caller verbatim (`SolveError::Numeric` is transparent). Physics-neutral: Methodus never
-interprets `code` or `origin`. Consumers: Finitum F2 maps `FinitumError::InputEvaluation` to it
-at its `map_err(.. NumericError::Operator { message })` sites; Krasis passes it through
-unchanged (workspace `PLAN.md` §6 W8 decision 3, GX-CONTRACTS C12.9 follow-on 6). Additive; no
-existing variant, digest or behaviour changed. Unit test in `src/error.rs`.
+`bdf_candidate_rate(&pre_step_state, &candidate_values, step, order)` returns the exact
+numerical rate computed by the existing implicit-step derivative routine. Save the BDF state
+before stepping; pass accepted values and the same step/order afterwards. BDF2 consumes
+complete unequal-step history, bootstrapping with BDF1 when history is absent. Explicit BDF1
+ignores complete older history. This read-only API performs no operator callback or solve.
 
-## E7/SC-W3 inexact Newton–Krylov driver (W7, 2026-09-01)
+It validates vector dimensions, finite values/time, positive present/previous steps, complete
+history, representable time advancement, and finite coefficients/results. Tests distinguish
+unequal-step quadratic BDF2 from BDF1, cover bootstrap/refusals, and verify reconstructed
+rates satisfy the actual accepted implicit solve at unequal steps for both configured orders.
 
-`solve_newton_krylov` solves `F(x) = 0` by inexact Newton over a matrix-free
-Jacobian: `JacobianOperator` exposes `NonlinearOperator::jacobian_vector_
-product` at a frozen state as a square `LinearOperator` whose declared
-`OperatorProperties` come from the new defaulted trait method
-`NonlinearOperator::jacobian_properties` (and `DaeOperator::
-jacobian_properties` for the implicit-step Jacobian `∂F/∂y + α ∂F/∂ẏ`;
-both default to `Unknown`, so admission is honest by default). The inner
-solve is any `KrylovMethod` through `solve_krylov`, so each method's own
-admission applies unchanged (CG refuses a `Nonsymmetric` Jacobian, MINRES
-refuses anything not `Symmetric`, GMRES/BiCGSTAB admit any declaration);
-nothing is ever substituted. `ForcingPolicy` is `Constant { forcing }` or
-`EisenstatWalker { initial, gamma, alpha, maximum }` (choice 2 with the
-collapse safeguard), both floored at half the outer threshold relative to
-`‖F_k‖` so the last inner solves are never oversolved. Globalization is
-backtracking with the Eisenstat–Walker sufficient-decrease condition
-`‖F(x+λs)‖ ≤ (1 − tλ(1−η))‖F(x)‖`. Hooks: `PreconditionerFactory::build`
-is called at every iterate with the frozen Jacobian and state and may return
-`None`; a `NullspaceProjector` is forwarded to `solve_krylov`. Telemetry
-(`NewtonKrylovReport`/`NewtonKrylovIteration`/`LinearStepSummary`) records
-per outer iteration the residual norm, the forcing used, and the inner
-solve's method, iteration count, verdict, final residual, and restart cycles;
-it is bit-reproducible. An inner solve that exhausts its budget is recorded
-and its step still tried (inexact Newton needs only a descent direction);
-a refusal, breakdown, or failed sufficient decrease is a typed error; an
-exhausted outer budget is `converged == false`.
+## W8 typed evaluation failures
 
-For Krasis's Newton-inside-BDF (batch P): `NonlinearSolver` is a
-`Send + Sync` trait with `solve(&dyn NonlinearOperator, context, initial)`;
-`DenseNewton` wraps `solve_newton`, `NewtonKrylovSolver` wraps
-`solve_newton_krylov`, and `BlockNewton::new(&BlockLayout, BlockStrategy,
-&NewtonConfig)` wraps `solve_blocks` (Gauss–Seidel/Jacobi/monolithic) so a
-partitioned iteration can run inside a step; `bdf_step_with(operator,
-context, state, step, config, solver: &dyn NonlinearSolver)` runs a BDF1/BDF2 attempt with the
-supplied solver (`config.newton` is then not consulted), and the implicit
-operator forwards `DaeOperator::jacobian_properties`. `bdf_step` is
-unchanged in signature and behaviour (`bdf_step_with` over `DenseNewton`).
-
-Acceptance tests (`tests/newton_krylov.rs`, 8): quadratic convergence
-(`‖F_{k+1}‖/‖F_k‖² < 2` in the local regime) on a 2-D nonsymmetric
-algebraic fixture with tiny constant forcing, superlinear convergence
-(strictly decreasing rate reaching `< 1e-2`) with Eisenstat–Walker; CG and
-MINRES refused on the declared-nonsymmetric Jacobian, BiCGSTAB admitted;
-`−u'' + u³ = f` (63 unknowns, SPD-declared Jacobian) through CG with
-quadratic ratios `< 0.1` on every effectively-exact step and the
-manufactured `sin(πx)` recovered to discretization accuracy;
-`−u'' + 8u' + u³ = f` (40 unknowns, nonsymmetric) through GMRES, CG refused
-even with `AssumeSymmetric` (that hatch covers only `Unknown`), an exact
-tridiagonal `PreconditionerFactory` making every inner solve one iteration
-and cutting total linear iterations, and agreement with dense `solve_newton`
-to 1e-10; a singular-Jacobian fixture (constant-mode nullspace) refused by
-MINRES without a projector and solved to the pseudo-solution through
-MINRES, GMRES and BiCGSTAB with `ConstantModeProjector`, the constant-mode
-component of the state preserved; 20 BDF2 steps of `y' = −y` through
-`bdf_step_with(NewtonKrylovSolver(CG))` matching `bdf_step` to 1e-12 and
-MINRES refused inside the step on a DAE declaring nothing; 10 BDF2 steps of
-a two-block coupled decay through `BlockNewton` Gauss–Seidel and Jacobi
-matching the dense path to 1e-11 with a mismatched layout refused; a fixed
-`&dyn Preconditioner` serving as the factory hook (`impl PreconditionerFactory
-for &P`) with a dimension mismatch refused; bit-identical
-and JSON-round-trip telemetry plus honest outer-budget exhaustion. Unit
-tests cover configuration/forcing validation and the Eisenstat–Walker
-sequence, floor, and safeguard.
-
-## E7/SV1-D1 adjoint solve on nonsymmetric operators (W7, 2026-09-01)
-
-`solve_adjoint` solves `Aᵀ λ = g` through a `TransposeOperator` view of `A`
-and never approximates a transpose: the view is built either by symmetric
-delegation (`TransposeOperator::new`, refused unless `Symmetric` is declared)
-or from an explicit `TransposableOperator::apply_transpose`
-(`TransposeOperator::explicit`, the assembled-operator path — `CsrMatrix`
-implements it by transposed CSR traversal). An operator offering neither is
-refused at construction, before any iteration. `TransposeOperator` now
-reports its `TransposeSource` (`SymmetricDelegation | ExplicitTranspose`) and
-carries the primal `OperatorProperties` through (definiteness and symmetry
-are transpose-invariant; nullspace dimension and block structure only for
-square operators).
-
-Method selection is one serializable `KrylovMethod` value
-(`ConjugateGradient | Minres | Gmres | BiCgStab`, each with its full
-config) dispatched by `solve_krylov` without loosening any solver's own
-admission; the adjoint driver additionally refuses conjugate gradient on a
-`Nonsymmetric` transpose and MINRES on a `Nonsymmetric`/`Unknown` one with
-adjoint-specific refusal text. `solve_bicgstab` is new: right-preconditioned
-van der Vorst BiCGSTAB whose reported residuals are always the true
-`‖b − A x‖`, with Lanczos-type breakdowns typed as `KrylovBreakdown`.
-Acceptance is residual-based and method-independent: after the Krylov
-solve the driver recomputes `g − Aᵀ λ` through the transpose action and sets
-`converged` only from that norm against `ResidualAcceptance`, independent of
-the inner solver's (possibly preconditioner-weighted) estimate, which is
-reported separately as `solver_converged`. An exhausted budget returns
-`converged == false` with the measured residual, never an error and never a
-claim. Telemetry (`AdjointSolveReport`) is typed and bit-reproducible.
-
-Acceptance tests (`tests/adjoint.rs`, 9): `<λ, b> = <g, u>` for `A u = b`
-and `Aᵀ λ = g` within 1e-10 on a 6x6 nonsymmetric dense fixture and a 12x12
-nonsymmetric upwind convection–diffusion `CsrMatrix`, through both GMRES and
-BiCGSTAB; CG/MINRES refusal on a nonsymmetric transpose; refusal of a
-transpose-less matrix-free operator before any solve; rectangular refusal;
-acceptance measured on the true residual under a left preconditioner; budget
-exhaustion reported as non-acceptance; bit-identical and JSON-round-trip
-telemetry; transpose property carry-through. Unit tests cover BiCGSTAB (true
-residuals with and without preconditioning, determinism, rectangular
-refusal) and the dispatcher (kind reporting, per-solver admission kept, CG
-refusing a projector, GMRES with a projector reaching the pseudo-solution of
-a singular consistent system, tolerance override keeping other fields).
-
-Deviation recorded: C11.16 said GMRES takes no nullspace projector. The
-dispatcher gives GMRES/BiCGSTAB a projector hook that projects only the
-initial guess and the returned solution (selecting the representative
-orthogonal to the declared nullspace without touching the residual, so
-acceptance stays honest); `solve_gmres`/`solve_bicgstab` signatures are
-unchanged. Conjugate gradient still refuses a projector.
-
-## Earlier slices (compacted; details in Git history)
-
-- **SV2-B6 (Methodus `8de32cd`, ratified as GX-CONTRACTS C5.6):** MINRES
-  (declared-`Symmetric` only, any definiteness, `NullspaceProjector` hook)
-  and restarted GMRES (any declared symmetry, square only) with typed
-  refusals and bit-reproducible `LinearIteration` traces;
-  `ConstantModeProjector`; `CompositeBlockPreconditioner` as the
-  block-diagonal composition contract for saddle-point preconditioning
-  (no Schur-complement computation). Twelve acceptance tests.
-- **SV1-C5 / GX-D2 (`6e7fd94`):** `OperatorProperties` (symmetry,
-  definiteness, nullspace dimension, structure hint), `TransposableOperator`
-  with `TransposeOperator::{new, explicit}`, `verify_adjoint_identity`,
-  honest CG refusal of `Indefinite`/nullspace declarations.
+`NumericError::Evaluation { code, origin, message }` passes producer failures unchanged through
+algorithms and `SolveError::Numeric`. `evaluation_code()` exposes the code without string
+matching. Methodus does not interpret caller codes or origins; Finitum and Krasis consume the
+contract. Existing configuration/nonfinite error categories remain distinct.
 
 ## Current role
 
@@ -211,14 +88,6 @@ root package named `methodus` with no subordinate packages.
   checks. Malformed inputs and overflowed discrepancies are refused, never
   converted into passing evidence.
 
-## Extraction
-
-Created from Solverang history at numerical-core head `2bf2ee5` and renamed
-directly, without a forwarding package or compatibility facade; Solverang
-now consumes Methodus. Historical mixed CAD/scientific/JIT/pipeline code
-remains in Git history only. This was an intentional API break with no
-compatibility types, feature aliases, or forwarding packages.
-
 ## Dependency contract
 
 Krasis implements `NonlinearOperator`/`DaeOperator`/`BlockNonlinearOperator`;
@@ -228,22 +97,11 @@ scientific-stack repository.
 
 ## Validation
 
-Validated locally on 2026-09-01 (E7/SV1-D1 adjoint slice and the
-Newton–Krylov driver):
-
-- formatting and all-target checks passed;
-- warnings-denied Clippy passed;
-- 95 tests passed (64 unit, 31 integration), 0 failed;
-- warnings-denied rustdoc passed; doctests passed (0 doctests present);
-- `git diff --check` passed.
-
-Prior validation (2026-08-31, SV2-B6 slice, 65 tests): formatting, locked
-all-target checks, warnings-denied Clippy, warnings-denied rustdoc/doctests,
-and `git diff --check` all passed.
-
-Prior validation (2026-08-24, 31 tests): formatting, locked all-target
-checks, warnings-denied Clippy, warnings-denied rustdoc/doctests, and
-`git diff --check` all passed.
+- `cargo test -q -p methodus`: 98 tests passed (65 unit, 33 integration), none failed or ignored.
+- Focused time integration: 7 tests passed (including 2 new candidate-rate tests).
+- `cargo clippy -p methodus --all-targets -- -D warnings`: passed.
+- `RUSTDOCFLAGS='-D warnings' cargo doc -p methodus --no-deps`: passed.
+- Scoped formatting and `git diff --check`: passed.
 
 ## Known limits (updated after the W7 lane-3 slices)
 

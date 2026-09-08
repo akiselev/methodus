@@ -25,8 +25,8 @@ mod verification;
 
 pub use adjoint::{AdjointConfig, AdjointSolveReport, ResidualAcceptance, solve_adjoint};
 pub use bdf::{
-    AcceptedStep, BdfConfig, BdfOrder, BdfState, LocatedEvent, RejectedStep, StepOutcome, bdf_step,
-    bdf_step_with,
+    AcceptedStep, BdfConfig, BdfOrder, BdfState, LocatedEvent, RejectedStep, StepOutcome,
+    bdf_candidate_rate, bdf_step, bdf_step_with,
 };
 pub use block::{
     Block, BlockLayout, BlockLinearOperator, BlockNonlinearOperator, BlockPreconditioner, BlockSpec,

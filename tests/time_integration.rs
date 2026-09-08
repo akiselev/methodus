@@ -182,3 +182,80 @@ fn deserialization_rejects_incomplete_bdf_history() {
     }"#;
     assert!(serde_json::from_str::<BdfState>(malformed).is_err());
 }
+
+#[test]
+fn candidate_rate_uses_configured_order_and_unequal_step_history() {
+    let state = BdfState {
+        time: 1.0,
+        values: vec![1.0],
+        previous_values: Some(vec![0.25]),
+        previous_step: Some(0.5),
+        accepted_steps: 1,
+    };
+    let candidate = [1.5625]; // t² at t = 1.25
+    let rate = methodus::bdf_candidate_rate(&state, &candidate, 0.25, BdfOrder::Two).unwrap();
+    assert!((rate[0] - 2.5).abs() < 1e-14);
+    let first = methodus::bdf_candidate_rate(&state, &candidate, 0.25, BdfOrder::One).unwrap();
+    assert_eq!(first, vec![2.25]);
+    let bootstrap = BdfState {
+        previous_values: None,
+        previous_step: None,
+        ..state.clone()
+    };
+    assert_eq!(
+        methodus::bdf_candidate_rate(&bootstrap, &candidate, 0.25, BdfOrder::Two).unwrap(),
+        first
+    );
+    let mut bad = state.clone();
+    bad.previous_step = None;
+    assert!(methodus::bdf_candidate_rate(&bad, &candidate, 0.25, BdfOrder::Two).is_err());
+    for step in [0.0, -0.1, f64::NAN, f64::INFINITY] {
+        assert!(methodus::bdf_candidate_rate(&state, &candidate, step, BdfOrder::Two).is_err());
+    }
+    assert!(methodus::bdf_candidate_rate(&state, &[], 0.25, BdfOrder::Two).is_err());
+    assert!(methodus::bdf_candidate_rate(&state, &[f64::NAN], 0.25, BdfOrder::Two).is_err());
+    bad = state.clone();
+    bad.previous_values = Some(vec![]);
+    assert!(methodus::bdf_candidate_rate(&bad, &candidate, 0.25, BdfOrder::Two).is_err());
+    bad = state.clone();
+    bad.previous_values = Some(vec![f64::INFINITY]);
+    assert!(methodus::bdf_candidate_rate(&bad, &candidate, 0.25, BdfOrder::Two).is_err());
+    bad = state;
+    bad.time = f64::MAX;
+    assert!(methodus::bdf_candidate_rate(&bad, &candidate, 0.25, BdfOrder::Two).is_err());
+}
+
+#[test]
+fn accepted_candidate_rate_satisfies_the_actual_implicit_solve() {
+    let context = EvaluationContext::reproducible();
+    for order in [BdfOrder::One, BdfOrder::Two] {
+        let config = BdfConfig {
+            order,
+            absolute_tolerance: 1e12,
+            relative_tolerance: 1e12,
+            ..BdfConfig::default()
+        };
+        let mut state = BdfState::initialize(&Decay, &context, 0.0, vec![1.0]).unwrap();
+        for step in [0.1, 0.15, 0.07] {
+            let StepOutcome::Accepted(accepted) =
+                bdf_step(&Decay, &context, &state, step, &config).unwrap()
+            else {
+                panic!("test disables rejection")
+            };
+            let rate =
+                methodus::bdf_candidate_rate(&state, &accepted.state.values, step, order).unwrap();
+            let mut residual = vec![0.0];
+            Decay
+                .residual(
+                    &context,
+                    accepted.state.time,
+                    &accepted.state.values,
+                    &rate,
+                    &mut residual,
+                )
+                .unwrap();
+            assert!(residual[0].abs() < 1e-12, "{order:?}: {residual:?}");
+            state = accepted.state;
+        }
+    }
+}
