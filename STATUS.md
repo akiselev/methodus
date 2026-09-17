@@ -2,7 +2,7 @@
 
 Updated: 2026-09-08
 Branch: `master`
-Milestone: W8 accepted-candidate BDF rate reporting (working tree); existing numerical
+Milestone: W8 accepted-candidate BDF rate reporting (published `4f52d38`); existing numerical
 algorithms, serialized state and execution behavior unchanged.
 
 ## W8 BDF candidate-rate API
