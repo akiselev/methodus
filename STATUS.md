@@ -1,7 +1,7 @@
 # Methodus status
 
-2026-09-18 implementation in acceptance:
-SC-W3 candidate: optional owner-provided linear/nonlinear/DAE diagonals; Jacobian and implicit BDF adapters forward the actual state, rate and shift. JacobiFactory consumes the existing block diagonal preconditioner and refuses missing/zero/nonfinite diagonals without probing or fallback. Owner gate passed: 100 tests, formatting, strict clippy, rustdoc and doctests; final consumer acceptance pending.
+2026-09-18 bounded implementation accepted:
+SC-W3: optional owner-provided linear/nonlinear/DAE diagonals; Jacobian and implicit BDF adapters forward the actual state, rate and shift. JacobiFactory consumes the existing block diagonal preconditioner and refuses missing/zero/nonfinite diagonals without probing or fallback. Owner gate passed: 100 tests, formatting, strict clippy, rustdoc and doctests; final consumer acceptance passed (210 tests across 35 targets, documented external-fixture retry).
 
 
 Updated: 2026-09-08
@@ -179,3 +179,5 @@ scientific-stack repository.
    contracts start when the SC-W3 Methodus lane is launched, not before.
 
 Blockers: none.
+
+Final cross-repository evidence: [September 18 acceptance](../sinbad/docs/validation/2026-09-18-assembly/README.md).
