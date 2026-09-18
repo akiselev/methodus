@@ -1,5 +1,9 @@
 # Methodus status
 
+2026-09-18 implementation in acceptance:
+SC-W3 candidate: optional owner-provided linear/nonlinear/DAE diagonals; Jacobian and implicit BDF adapters forward the actual state, rate and shift. JacobiFactory consumes the existing block diagonal preconditioner and refuses missing/zero/nonfinite diagonals without probing or fallback. Owner gate passed: 100 tests, formatting, strict clippy, rustdoc and doctests; final consumer acceptance pending.
+
+
 Updated: 2026-09-08
 Branch: `master`
 Milestone: W8 accepted-candidate BDF rate reporting (published `4f52d38`); existing numerical

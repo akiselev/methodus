@@ -176,6 +176,11 @@ pub trait LinearOperator: Send + Sync {
     fn properties(&self) -> OperatorProperties {
         OperatorProperties::from_symmetry(self.symmetry())
     }
+    /// Exact diagonal when the owner can construct it without global probing.
+    /// None means unavailable; callers must not silently invent a diagonal.
+    fn diagonal(&self, _context: &EvaluationContext) -> Result<Option<Vec<f64>>, NumericError> {
+        Ok(None)
+    }
     fn apply(
         &self,
         context: &EvaluationContext,
@@ -232,6 +237,14 @@ pub trait NonlinearOperator: Send + Sync {
     fn jacobian_properties(&self) -> OperatorProperties {
         OperatorProperties::default()
     }
+    /// Owner-supplied diagonal of the Jacobian at this state, if supported.
+    fn jacobian_diagonal(
+        &self,
+        _context: &EvaluationContext,
+        _state: &[f64],
+    ) -> Result<Option<Vec<f64>>, NumericError> {
+        Ok(None)
+    }
     fn residual(
         &self,
         context: &EvaluationContext,
@@ -256,6 +269,18 @@ pub trait DaeOperator: Send + Sync {
     /// The default makes no claim.
     fn jacobian_properties(&self) -> OperatorProperties {
         OperatorProperties::default()
+    }
+    /// Diagonal of dF/dy + rate_shift*dF/dy_dot, at the supplied state and rate.
+    #[allow(clippy::too_many_arguments)]
+    fn jacobian_diagonal(
+        &self,
+        _context: &EvaluationContext,
+        _time: f64,
+        _state: &[f64],
+        _state_rate: &[f64],
+        _rate_shift: f64,
+    ) -> Result<Option<Vec<f64>>, NumericError> {
+        Ok(None)
     }
     fn residual(
         &self,

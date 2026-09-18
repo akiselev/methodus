@@ -2,6 +2,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::{BlockLayout, BlockPreconditioner, EvaluationContext, NumericError, Preconditioner};
 
+/// Builds the existing block-diagonal inverse from an owner-supplied exact
+/// diagonal. No global probing, zero replacement or silent fallback.
+#[derive(Clone, Copy, Debug)]
+pub struct JacobiFactory;
+impl crate::PreconditionerFactory for JacobiFactory {
+    fn build<'a>(
+        &'a self,
+        context: &EvaluationContext,
+        jacobian: &dyn crate::LinearOperator,
+        _state: &[f64],
+    ) -> Result<Option<Box<dyn Preconditioner + 'a>>, NumericError> {
+        let diagonal = jacobian
+            .diagonal(context)?
+            .ok_or_else(|| NumericError::InvalidInput {
+                message: "Jacobi requires an owner-supplied Jacobian diagonal".into(),
+            })?;
+        NumericError::require_len("Jacobi diagonal", diagonal.len(), jacobian.rows())?;
+        NumericError::require_finite("Jacobi diagonal", &diagonal)?;
+        let inverse = diagonal.iter().map(|value| 1.0 / value).collect::<Vec<_>>();
+        NumericError::require_finite("Jacobi inverse", &inverse)?;
+        let layout = BlockLayout::new(vec![crate::BlockSpec {
+            name: "diagonal".into(),
+            length: inverse.len(),
+            residual_scale: 1.0,
+        }])
+        .map_err(|error| NumericError::InvalidInput {
+            message: error.to_string(),
+        })?;
+        Ok(Some(Box::new(BlockDiagonalPreconditioner::new(
+            layout, inverse,
+        )?)))
+    }
+}
+
 /// Elementwise inverse diagonal organized by a validated block layout.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "BlockDiagonalPreconditionerData")]

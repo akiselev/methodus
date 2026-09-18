@@ -340,6 +340,16 @@ fn implicit_step(
             self.operator.jacobian_properties()
         }
 
+        fn jacobian_diagonal(
+            &self,
+            context: &EvaluationContext,
+            values: &[f64],
+        ) -> Result<Option<Vec<f64>>, NumericError> {
+            let (rate, alpha) = bdf_derivative(values, self.state, self.previous, self.step)?;
+            self.operator
+                .jacobian_diagonal(context, self.next_time, values, &rate, alpha)
+        }
+
         fn residual(
             &self,
             context: &EvaluationContext,

@@ -87,6 +87,10 @@ impl<F: NonlinearOperator + ?Sized> LinearOperator for JacobianOperator<'_, F> {
         self.properties.clone()
     }
 
+    fn diagonal(&self, context: &EvaluationContext) -> Result<Option<Vec<f64>>, NumericError> {
+        self.operator.jacobian_diagonal(context, self.state)
+    }
+
     fn apply(
         &self,
         context: &EvaluationContext,

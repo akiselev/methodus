@@ -62,7 +62,7 @@ pub use operator::{
 };
 pub use preconditioner::{
     BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, CompositeBlockPreconditioner,
-    LowerBlock,
+    JacobiFactory, LowerBlock,
 };
 pub use sparse::CsrMatrix;
 pub use transpose::{

@@ -30,6 +30,13 @@ impl NonlinearOperator for Circle {
     fn jacobian_properties(&self) -> OperatorProperties {
         OperatorProperties::from_symmetry(OperatorSymmetry::Nonsymmetric)
     }
+    fn jacobian_diagonal(
+        &self,
+        _context: &EvaluationContext,
+        state: &[f64],
+    ) -> Result<Option<Vec<f64>>, NumericError> {
+        Ok(Some(vec![2.0 * state[0], -1.0]))
+    }
     fn residual(
         &self,
         _context: &EvaluationContext,
@@ -975,4 +982,106 @@ fn a_fixed_preconditioner_serves_as_the_factory_hook() {
         error,
         SolveError::Numeric(NumericError::DimensionMismatch { .. })
     ));
+}
+
+#[test]
+fn owner_diagonal_drives_jacobi_without_a_probing_fallback() {
+    let context = EvaluationContext::reproducible();
+    let method = KrylovMethod::Gmres(GmresConfig::default());
+    let result = solve_newton_krylov(
+        &Circle,
+        &context,
+        &[0.8, 1.2],
+        &method,
+        Some(&methodus::JacobiFactory),
+        None,
+        &exact_newton_config(1e-11),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert!(result.state.iter().all(|v| (v - 1.0).abs() < 1e-10));
+    let zero = methodus::JacobianOperator::new(&Circle, &[0.0, 1.0]).unwrap();
+    assert!(
+        methodus::JacobiFactory
+            .build(&context, &zero, &[0.0, 1.0])
+            .is_err()
+    );
+    let unavailable = methodus::CsrMatrix::from_triplets(1, 1, vec![(0, 0, 1.0)]).unwrap();
+    assert!(
+        methodus::JacobiFactory
+            .build(&context, &unavailable, &[1.0])
+            .is_err()
+    );
+}
+
+#[test]
+fn bdf_passes_the_actual_rate_and_shift_to_the_owner_diagonal() {
+    struct Decay;
+    impl DaeOperator for Decay {
+        fn dimension(&self) -> usize {
+            2
+        }
+        fn residual(
+            &self,
+            _: &EvaluationContext,
+            _: f64,
+            state: &[f64],
+            rate: &[f64],
+            out: &mut [f64],
+        ) -> Result<(), NumericError> {
+            for i in 0..2 {
+                out[i] = rate[i] + [2.0, 5.0][i] * state[i];
+            }
+            Ok(())
+        }
+        fn jacobian_vector_product(
+            &self,
+            _: &EvaluationContext,
+            _: f64,
+            _: &[f64],
+            _: &[f64],
+            direction: &[f64],
+            rate_direction: &[f64],
+            out: &mut [f64],
+        ) -> Result<(), NumericError> {
+            for i in 0..2 {
+                out[i] = rate_direction[i] + [2.0, 5.0][i] * direction[i];
+            }
+            Ok(())
+        }
+        fn jacobian_diagonal(
+            &self,
+            _: &EvaluationContext,
+            time: f64,
+            state: &[f64],
+            rate: &[f64],
+            shift: f64,
+        ) -> Result<Option<Vec<f64>>, NumericError> {
+            assert!((time - 0.1).abs() < 1e-14);
+            assert!((shift - 10.0).abs() < 1e-14);
+            for i in 0..2 {
+                assert!((rate[i] - (state[i] - 1.0) / 0.1).abs() < 1e-13);
+            }
+            Ok(Some(vec![shift + 2.0, shift + 5.0]))
+        }
+    }
+    let context = EvaluationContext::reproducible();
+    let method = KrylovMethod::Gmres(GmresConfig::default());
+    let config = exact_newton_config(1e-11);
+    let solver = NewtonKrylovSolver::new(&method, Some(&methodus::JacobiFactory), None, &config);
+    let state = BdfState::initialize(&Decay, &context, 0.0, vec![1.0, 1.0]).unwrap();
+    let outcome = bdf_step_with(
+        &Decay,
+        &context,
+        &state,
+        0.1,
+        &BdfConfig::default(),
+        &solver,
+    )
+    .unwrap();
+    let StepOutcome::Accepted(step) = outcome else {
+        panic!("step rejected")
+    };
+    assert!((step.state.values[0] - 1.0 / 1.2).abs() < 1e-10);
+    assert!((step.state.values[1] - 1.0 / 1.5).abs() < 1e-10);
 }
