@@ -77,6 +77,8 @@ pub enum SolveError {
     NotConverged,
     #[error("conjugate-gradient iteration {iteration} encountered a non-positive search curvature")]
     KrylovBreakdown { iteration: usize },
+    #[error("fixed-point acceleration iteration {iteration} broke down: {reason}")]
+    AccelerationBreakdown { iteration: usize, reason: String },
 }
 
 #[cfg(test)]

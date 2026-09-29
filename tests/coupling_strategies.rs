@@ -1,6 +1,6 @@
 use methodus::{
-    BlockLayout, BlockNonlinearOperator, BlockSpec, BlockStrategy, EvaluationContext, NewtonConfig,
-    NonlinearOperator, NumericError, solve_blocks,
+    AccelerationMethod, BlockLayout, BlockNonlinearOperator, BlockSpec, BlockStrategy,
+    EvaluationContext, NewtonConfig, NonlinearOperator, NumericError, SolveError, solve_blocks,
 };
 
 struct LinearCoupled {
@@ -118,4 +118,42 @@ fn strong_coupling_exposes_staggered_failure_while_monolithic_converges() {
     assert!(monolithic.converged);
     assert!(!staggered.converged);
     assert!(monolithic.trace.len() < staggered.trace.len());
+}
+
+#[test]
+fn accelerated_partitioned_solve_converges_on_a_strong_coupling_staggering_fails() {
+    let context = EvaluationContext::reproducible();
+    let problem = LinearCoupled::new(0.99);
+    let mut accelerated_config = config(30);
+    accelerated_config.acceleration = Some(AccelerationMethod::Aitken {
+        initial_factor: 1.0,
+    });
+    let accelerated = solve_blocks(
+        &problem,
+        &context,
+        &[0.0, 0.0],
+        BlockStrategy::GaussSeidel,
+        &accelerated_config,
+    )
+    .unwrap();
+    assert!(accelerated.converged);
+    assert!((accelerated.state[0] - 1.0 / (1.0 - 0.99_f64.powi(2))).abs() < 1.0e-8);
+    assert!((accelerated.state[1] + 0.99 / (1.0 - 0.99_f64.powi(2))).abs() < 1.0e-8);
+}
+
+#[test]
+fn acceleration_is_refused_with_a_monolithic_strategy() {
+    let context = EvaluationContext::reproducible();
+    let problem = LinearCoupled::new(0.7);
+    let mut accelerated_config = config(8);
+    accelerated_config.acceleration = Some(AccelerationMethod::FixedRelaxation { factor: 0.5 });
+    let error = solve_blocks(
+        &problem,
+        &context,
+        &[0.0, 0.0],
+        BlockStrategy::Monolithic,
+        &accelerated_config,
+    )
+    .unwrap_err();
+    assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
 }

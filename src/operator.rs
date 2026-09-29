@@ -218,6 +218,15 @@ pub fn check_properties_consistency(
 /// Approximate inverse action used by iterative linear solvers.
 pub trait Preconditioner: Send + Sync {
     fn dimension(&self) -> usize;
+    /// Declared symmetry of this preconditioner's action, for algorithms
+    /// (conjugate gradient) that are only valid with a symmetric
+    /// preconditioner. The default makes no claim; only an affirmative
+    /// [`OperatorSymmetry::Nonsymmetric`] declaration changes admission
+    /// (an undeclared preconditioner remains accepted, so this is additive
+    /// over every preconditioner that predates this method).
+    fn symmetry(&self) -> OperatorSymmetry {
+        OperatorSymmetry::Unknown
+    }
     fn apply_inverse(
         &self,
         context: &EvaluationContext,

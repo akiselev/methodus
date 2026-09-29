@@ -1,33 +1,89 @@
 # Methodus status
 
-2026-09-18 bounded implementation accepted:
-SC-W3: optional owner-provided linear/nonlinear/DAE diagonals; Jacobian and implicit BDF adapters forward the actual state, rate and shift. JacobiFactory consumes the existing block diagonal preconditioner and refuses missing/zero/nonfinite diagonals without probing or fallback. Owner gate passed: 100 tests, formatting, strict clippy, rustdoc and doctests; final consumer acceptance passed (210 tests across 35 targets, documented external-fixture retry).
+2026-09-29 SC-W3 preconditioners/acceleration landed (W9 lane): composite block
+Gauss-Seidel/triangular preconditioners beyond Jacobi, and iterate-sequence
+acceleration (fixed relaxation, Aitken) over `&[f64]` fixed-point sequences,
+wired as an opt-in `solve_blocks` option. See "SC-W3 composite block
+preconditioners" and "SC-W3 iterate-sequence acceleration" below.
 
+2026-09-18 bounded implementation accepted: SC-W3 optional owner-provided
+linear/nonlinear/DAE diagonals; `JacobiFactory` consumes the existing block
+diagonal preconditioner and refuses missing/zero/nonfinite diagonals without
+probing or fallback. Owner gate passed: 100 tests; final consumer acceptance
+passed (210 tests across 35 targets, documented external-fixture retry).
 
-Updated: 2026-09-08
+Updated: 2026-09-29
 Branch: `master`
-Milestone: W8 accepted-candidate BDF rate reporting (published `4f52d38`); existing numerical
-algorithms, serialized state and execution behavior unchanged.
+Milestone: SC-W3 composite block preconditioners and acceleration (this lane);
+existing numerical algorithms, serialized state and execution behavior
+unchanged (default `NewtonConfig`/`solve_blocks` output is bit-for-bit
+identical — acceleration is opt-in via a new `None`-default field).
 
-## W8 BDF candidate-rate API
+## SC-W3 composite block preconditioners
 
-`bdf_candidate_rate(&pre_step_state, &candidate_values, step, order)` returns the exact
-numerical rate computed by the existing implicit-step derivative routine. Save the BDF state
-before stepping; pass accepted values and the same step/order afterwards. BDF2 consumes
-complete unequal-step history, bootstrapping with BDF1 when history is absent. Explicit BDF1
-ignores complete older history. This read-only API performs no operator callback or solve.
+`BlockGaussSeidelPreconditioner` (`preconditioner.rs`): an owner-supplied
+`BlockLayout`, one owner-supplied diagonal-block `Preconditioner` per block
+(the existing `BlockDiagonalPreconditioner`/Jacobi, a dense per-block solve,
+or an owner inner Krylov solve), and owner-supplied off-diagonal
+`BlockCouplingAction`s (row/column block actions, not dense storage). One
+`GaussSeidelSweep::Forward` application is a block-lower-triangular solve;
+`Backward` is block-upper-triangular; `Symmetric` runs both sweeps in
+sequence. Same refusal discipline as `JacobiFactory`: no probing, no zero
+replacement, typed refusals for a diagonal-solve count/dimension mismatch, an
+out-of-range or self-coupling block index, and nonfinite input.
 
-It validates vector dimensions, finite values/time, positive present/previous steps, complete
-history, representable time advancement, and finite coefficients/results. Tests distinguish
-unequal-step quadratic BDF2 from BDF1, cover bootstrap/refusals, and verify reconstructed
-rates satisfy the actual accepted implicit solve at unequal steps for both configured orders.
+Symmetry is declared, not assumed: `Forward`/`Backward` always declare
+`Nonsymmetric`; `Symmetric` declares `Symmetric` only when every diagonal
+solve itself declares `Symmetric`, else `Nonsymmetric`. `Preconditioner`
+gained a defaulted `symmetry()` method (`Unknown` unless overridden, so every
+preexisting preconditioner is unaffected); `solve_conjugate_gradient` now
+refuses a preconditioner explicitly declared `Nonsymmetric` (an addition — no
+preexisting preconditioner declares this, so no existing caller is affected).
+`BlockDiagonalPreconditioner` now declares `Symmetric`;
+`BlockLowerTriangularPreconditioner` now declares `Nonsymmetric`.
 
-## W8 typed evaluation failures
+Proof: exact one-application solve of a block-triangular system for both
+`Forward` and `Backward` (`preconditioner.rs` tests); measured GMRES
+iteration counts on a 2-block and a 3-block coupled dense system, asserted
+exactly — two blocks `(none, jacobi, gs) = (4, 2, 2)`, three blocks
+`(5, 3, 2)` — showing both preconditioners reduce iterations over none, and
+the exact per-block solve is never worse than elementwise Jacobi; the
+symmetry declaration rule including conjugate gradient's refusal of a
+declared-nonsymmetric preconditioner; and every listed refusal.
 
-`NumericError::Evaluation { code, origin, message }` passes producer failures unchanged through
-algorithms and `SolveError::Numeric`. `evaluation_code()` exposes the code without string
-matching. Methodus does not interpret caller codes or origins; Finitum and Krasis consume the
-contract. Existing configuration/nonfinite error categories remain distinct.
+## SC-W3 iterate-sequence acceleration
+
+`acceleration.rs`: `FixedPointOperator` (one `G(x)` evaluation over `&[f64]`)
+and `accelerate_fixed_point` drive `x_{k+1} = x_k + factor*(G(x_k) - x_k)`
+under `AccelerationMethod::FixedRelaxation` (constant factor) or `::Aitken`
+(vector Δ², factor recomputed each iteration from the two most recent
+fixed-point residuals). Typed report: per-iteration residual norm and
+relaxation factor used. Typed refusals, never NaN or a silent unconverged
+iterate: nonfinite evaluation/state (`NumericError`), a degenerate Aitken
+denominator (`SolveError::AccelerationBreakdown`), and exhausting
+`max_iterations` without meeting tolerance (`SolveError::NotConverged`).
+
+Integrated into `solve_blocks` as `NewtonConfig.acceleration:
+Option<AccelerationMethod>` (`#[serde(default)]`, `None` by default): when
+set, a `GaussSeidel`/`Jacobi` outer iteration relaxes its partitioned Newton
+correction by the accelerator instead of backtracking (the correction vector
+itself is the fixed-point residual; no extra `G` evaluation). Refused with
+`Monolithic` (no partitioned fixed-point sequence exists there). No new
+entry point; every existing `solve_blocks`/`NewtonConfig` caller is
+unaffected because the field defaults to `None`.
+
+Proof: a contractive 2-block linear fixed point where Aitken converges in
+provably fewer iterations than plain iteration, counts asserted exactly
+(`(plain, aitken) = (111, 8)`); a divergent full-step iteration refused as
+`NotConverged`; a degenerate-denominator refusal; a nonfinite-evaluation
+refusal; relaxation-factor bounds `(0, 1]` refused outside that range; and,
+in `solve_blocks`, a strongly-coupled (0.99) 2-block system that an
+unaccelerated `GaussSeidel` fails to converge on (existing test) now
+converges under Aitken acceleration, plus the `Monolithic` refusal.
+
+Out of scope (unchanged from the brief): IQN, multiplier/Nitsche interfaces,
+multilevel/ILU preconditioning, and Schur-complement/pressure-mass block
+*computation* (only the composition contract exists, per "Known limits").
 
 ## Current role
 
@@ -40,14 +96,14 @@ root package named `methodus` with no subordinate packages.
 ## Implemented surface
 
 - In-place `LinearOperator`, `Preconditioner`, `NonlinearOperator`, and `DaeOperator` traits, with
-  explicit symmetric/nonsymmetric/unknown metadata on linear actions.
+  explicit symmetric/nonsymmetric/unknown metadata on linear actions and (new) preconditioners.
 - `EvaluationContext` for explicit reproducibility policy.
 - Validated contiguous `BlockLayout` and block-aware operator/preconditioner traits.
 - Canonical sorted `CsrMatrix` with input-order-independent duplicate summation and matrix-vector action.
 - Deterministic preconditioned conjugate gradient over `LinearOperator` and `Preconditioner`, with
   residual traces, dimension/configuration validation, finite-value checks, and non-positive
-  curvature refusal. CG always refuses declared-nonsymmetric actions and requires either declared
-  symmetry or an explicit caller assumption for unknown actions.
+  curvature refusal. CG always refuses declared-nonsymmetric operators or preconditioners and
+  requires either declared symmetry or an explicit caller assumption for an unknown operator.
 - Deterministic MINRES over `LinearOperator`/`Preconditioner`/`NullspaceProjector`, admitting
   declared-`Symmetric` operators of any definiteness (indefinite included, e.g. saddle-point
   Stokes) and refusing `Nonsymmetric`/`Unknown` declarations outright with no caller-assumption
@@ -73,16 +129,20 @@ root package named `methodus` with no subordinate packages.
   `&dyn Preconditioner` is accepted as a `PreconditionerFactory`.
 - `NullspaceProjector` trait plus the bounded reference `ConstantModeProjector` (one constant mode
   over a contiguous coordinate range).
-- `CompositeBlockPreconditioner`: block-diagonal composition of caller-supplied per-block
-  `Preconditioner`s, the bounded reference implementation for Schur-complement/pressure-mass
-  saddle-point block preconditioning.
+- Block preconditioners: `BlockDiagonalPreconditioner` (Jacobi),
+  `BlockLowerTriangularPreconditioner` (dense off-diagonal storage),
+  `BlockGaussSeidelPreconditioner` (forward/backward/symmetric, action-based
+  off-diagonal couplings, owner inner solves), and `CompositeBlockPreconditioner`
+  (block-diagonal composition of independent per-block preconditioners, the
+  bounded reference for Schur-complement/pressure-mass saddle-point shapes).
+- `accelerate_fixed_point`/`AccelerationMethod` (fixed relaxation, Aitken) over
+  `&[f64]` fixed-point sequences, also selectable inside `solve_blocks`.
 - Invariant-validated deserialization for CSR matrices, block layouts, preconditioners, and BDF history.
 - Dense Newton correctness baseline with backtracking and residual traces
-  (still the default inside `bdf_step` and `solve_blocks`).
+  (still the default inside `bdf_step` and `solve_blocks` when no acceleration is configured).
 - Rectangular `LeastSquaresOperator`, deterministic damped Gauss-Newton solve,
   and centered-difference full-Jacobian verification.
 - Monolithic, block Gauss-Seidel, and block Jacobi nonlinear strategies.
-- Block-diagonal and block-lower-triangular preconditioners.
 - BDF1 and variable-step BDF2 implicit stepping with error-based rejection, consistent initialization, serializable step-size history, restart identity, and zero-crossing events.
 - Checked dimension, capacity, time, and accepted-step arithmetic on fallible solver paths.
 - Centered-difference checks for nonlinear and DAE Jacobian-vector products.
@@ -91,6 +151,10 @@ root package named `methodus` with no subordinate packages.
   max/trapezoidal-L2 norms; solve-strategy agreement; deterministic work-budget
   checks. Malformed inputs and overflowed discrepancies are refused, never
   converted into passing evidence.
+- `bdf_candidate_rate` (W8): read-only reconstruction of the numerical rate an
+  accepted implicit step used, from the pre-step state and accepted values.
+- `NumericError::Evaluation { code, origin, message }` (W8): a producer's typed
+  evaluation failure passes unchanged through every algorithm and `SolveError`.
 
 ## Dependency contract
 
@@ -101,40 +165,41 @@ scientific-stack repository.
 
 ## Validation
 
-- `cargo test -q -p methodus`: 98 tests passed (65 unit, 33 integration), none failed or ignored.
-- Focused time integration: 7 tests passed (including 2 new candidate-rate tests).
-- `cargo clippy -p methodus --all-targets -- -D warnings`: passed.
+- `cargo test -p methodus --lib`: 79 tests passed, none failed or ignored.
+- `cargo test -p methodus --test <name>` for each of `adjoint` (9),
+  `coupling_strategies` (4), `newton_krylov` (12), `time_integration` (7),
+  `time_restart_events` (2), `transpose` (3): all passed. 116 tests total.
+- `cargo fmt -p methodus -- --check`: passed.
+- `cargo clippy -p methodus --all-targets --all-features -- -D warnings`: passed.
 - `RUSTDOCFLAGS='-D warnings' cargo doc -p methodus --no-deps`: passed.
-- Scoped formatting and `git diff --check`: passed.
+- `cargo test -p methodus --doc`: 0 doctests, none failed.
 
-## Known limits (updated after the W7 lane-3 slices)
+## Known limits
 
 - A transpose exists only by `Symmetric` delegation or an explicit
   `TransposableOperator`; Finitum's matrix-free operators implement neither
   today, so `solve_adjoint` is usable on `CsrMatrix`-shaped assembled
-  operators and on whatever Finitum's SV1-C1 lane makes `TransposableOperator`
-  (W7 lane 2), not on the current Finitum matrix-free path.
+  operators and on whatever Finitum's SV1-C1 lane makes `TransposableOperator`,
+  not on the current Finitum matrix-free path.
 - `solve_adjoint` takes a preconditioner for `Aᵀ`; Methodus offers no
   transposed-preconditioner adapter, so a caller with an approximate inverse
   of `A` must transpose it itself where the two differ.
-- Linear-solve *sensitivity* beyond the adjoint solve (tangent solves with a
-  caller-differentiated right-hand side `∂b/∂p − (∂A/∂p) u`) needs no new
-  Methodus algorithm — it is a primal `solve_krylov` — and no wrapper was
-  added for it; the parameter-derivative actions are Finitum's (SV1-C3).
-- Block preconditioning is limited to block-diagonal and block-lower-
-  triangular composition (`BlockDiagonalPreconditioner`,
-  `BlockLowerTriangularPreconditioner`, `CompositeBlockPreconditioner`); no
-  algebraic multigrid, incomplete factorization, or Schur-complement
-  *computation* exists — only the composition contract. A caller must supply
-  its own approximate Schur-complement/pressure-mass block preconditioner.
+- Block preconditioning covers block-diagonal, block-lower-triangular (dense
+  or action-based via Gauss-Seidel), and symmetric/backward Gauss-Seidel
+  composition; no algebraic multigrid, incomplete factorization, or
+  Schur-complement/pressure-mass *computation* exists — only the composition
+  contract. A caller must supply its own approximate block solves.
+- Iterate-sequence acceleration covers fixed relaxation and Aitken; IQN and
+  any interface (multiplier/Nitsche) acceleration are not implemented.
 - BiCGSTAB has no restart or look-ahead; a Lanczos breakdown is a typed
   error, and a caller wanting robustness against it selects GMRES.
 - Newton–Krylov requires the operator's own JVP; there is no
-  finite-difference Jacobian-free fallback (a JVP is part of every Methodus
-  nonlinear contract). Globalization is backtracking only (no trust region),
-  and a residual already at its floating-point floor fails the sufficient-
-  decrease test as `LineSearchFailed` rather than being declared converged
-  — callers set the outer tolerance above `‖J‖·‖x‖·ε`.
+  finite-difference Jacobian-free fallback. Globalization is backtracking
+  only (no trust region) unless `NewtonConfig.acceleration` selects
+  relaxation/Aitken instead for a partitioned strategy; a residual already
+  at its floating-point floor fails the sufficient-decrease test as
+  `LineSearchFailed` rather than being declared converged — callers set the
+  outer tolerance above `‖J‖·‖x‖·ε`.
 - `solve_blocks` (Gauss–Seidel/Jacobi, also as `BlockNewton` inside BDF)
   still builds dense per-block Jacobians by JVP column probing; a
   block-aware Newton–Krylov (per-block Krylov solves inside the staggered
@@ -143,40 +208,21 @@ scientific-stack repository.
   supplied `NonlinearSolver`. `BdfConfig`'s serialized shape is unchanged.
 - MINRES's nullspace-projection hook ships one bounded reference
   implementation, `ConstantModeProjector` (a single constant mode over one
-  contiguous coordinate range). Multi-dimensional nullspaces (e.g.
-  rigid-body modes) need a caller-supplied `NullspaceProjector`; no reference
-  implementation exists for that shape.
+  contiguous coordinate range). Multi-dimensional nullspaces need a
+  caller-supplied `NullspaceProjector`.
 
 ## Next concrete work
 
-1. Done (Sinbad C11.17, `35f4e2a`): MINRES/GMRES are wired into Sinbad's
-   `SolvePolicy`/`LinearAlgorithm` admission; Methodus did not own that
-   selection policy and did not change.
-2. Promote the dense least-squares baseline only from representative Solverang
-   constraint systems and independent numerical checks.
-3. Replace dense Newton only after representative compiled systems define
-   scaling and performance requirements.
-4. Done (W7 lane 3, this slice): the inexact Newton–Krylov driver with
-   `KrylovMethod`, `PreconditionerFactory`, and `NullspaceProjector` hooks,
-   plus `bdf_step_with`/`NonlinearSolver` for Krasis's Newton inside BDF.
-   Krasis wires `NewtonKrylovSolver` into its DAE transactions when batch P
-   needs it; Sinbad resolves policy into `KrylovMethod`/`NewtonKrylovConfig`.
-5. SC composition (design `sinbad/ARCHITECTURE.md` §8–9; the SV7-F3 subset
-   pulled forward under its own ID): fixed-point acceleration over `&[f64]`
-   iterate sequences (relaxation, Aitken; IQN later), and a block-aware
-   Newton–Krylov if `solve_blocks`'s dense per-block Jacobians become the
-   bottleneck. `CompositeBlockPreconditioner` is reused as it is. Methodus
-   never sees instance names, outputs, or connector vocabulary; Sinbad
-   resolves schedules and convergence targets to block ids.
-6. Block-preconditioner contracts beyond block-diagonal composition
-   (Schur-complement/pressure-mass approximations as traits with a dense
-   reference) only when a Finitum or Krasis case demonstrates the need; none
-   surfaced in `ARCHITECTURE.md` §6/§9 during W7.
-   **Consumer named 2026-09-07:** workspace `PLAN.md` §6 "W8" decision 6 makes SC-W3 the
-   consumer — Sinbad's `PreconditionerPolicy` grows beyond `None`, Sinbad consumes
-   `NewtonKrylovSolver` + `PreconditionerFactory`, and the transient product path drops its dense
-   monolithic Newton Jacobian (kept only as the agreement oracle). The Schur/pressure-mass
-   contracts start when the SC-W3 Methodus lane is launched, not before.
+1. Block-aware Newton–Krylov inside `solve_blocks` (per-block Krylov solves
+   replacing dense per-block JVP-column Jacobians) only if a Finitum/Krasis
+   case demonstrates the current dense per-block cost is the bottleneck.
+2. Schur-complement/pressure-mass block *computation* (not just the
+   `CompositeBlockPreconditioner` composition contract already landed) only
+   when a Finitum or Krasis case demonstrates the need.
+3. IQN acceleration when SV7-F3's IQN item is scheduled; not part of this
+   SC-W3 increment.
+4. Promote the dense least-squares baseline only from representative
+   Solverang constraint systems and independent numerical checks.
 
 Blockers: none.
 

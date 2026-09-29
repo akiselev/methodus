@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use crate::acceleration::aitken_relaxation_factor;
 use crate::{
-    BlockLayout, BlockNonlinearOperator, EvaluationContext, NonlinearOperator, NumericError,
-    SolveError,
+    AccelerationMethod, BlockLayout, BlockNonlinearOperator, EvaluationContext, NonlinearOperator,
+    NumericError, SolveError,
 };
 
 /// Coupling policy for a block nonlinear problem.
@@ -22,6 +23,15 @@ pub struct NewtonConfig {
     pub initial_damping: f64,
     pub minimum_damping: f64,
     pub max_line_search_steps: usize,
+    /// Partitioned (`GaussSeidel`/`Jacobi`) iterate-sequence acceleration:
+    /// when set, the per-outer-iteration partitioned correction is
+    /// relaxed by [`AccelerationMethod`] instead of the backtracking line
+    /// search. `None` (the default) leaves every existing solve
+    /// unchanged. Refused with `Monolithic` (SC-W3): acceleration targets
+    /// the partitioned fixed-point sequence, which a monolithic solve
+    /// does not form.
+    #[serde(default)]
+    pub acceleration: Option<AccelerationMethod>,
 }
 
 impl Default for NewtonConfig {
@@ -33,6 +43,7 @@ impl Default for NewtonConfig {
             initial_damping: 1.0,
             minimum_damping: 1.0e-4,
             max_line_search_steps: 12,
+            acceleration: None,
         }
     }
 }
@@ -232,10 +243,13 @@ fn solve(
     layout: Option<&BlockLayout>,
     strategy: BlockStrategy,
 ) -> Result<SolveReport, SolveError> {
-    validate_config(config)?;
+    validate_config(config, strategy)?;
     let dimension = operator.dimension();
     NumericError::require_len("initial nonlinear state", initial_state.len(), dimension)?;
     NumericError::require_finite("initial nonlinear state", initial_state)?;
+
+    let mut acceleration_factor = config.acceleration.map(AccelerationMethod::initial_factor);
+    let mut previous_correction: Option<Vec<f64>> = None;
 
     let mut state = initial_state.to_vec();
     let mut residual = vec![0.0; dimension];
@@ -297,15 +311,32 @@ fn solve(
         };
         NumericError::require_finite("Newton update", &update)?;
 
-        let (next_state, damping) = backtrack(
-            operator,
-            context,
-            &state,
-            &update,
-            scaled_residual_norm,
-            layout,
-            config,
-        )?;
+        let (next_state, damping) = if let Some(method) = config.acceleration {
+            let mut factor = acceleration_factor.expect("set whenever config.acceleration is Some");
+            if let (AccelerationMethod::Aitken { .. }, Some(previous)) =
+                (method, &previous_correction)
+            {
+                factor = aitken_relaxation_factor(iteration, factor, previous, &update)?;
+            }
+            let mut candidate = state.clone();
+            for (value, delta) in candidate.iter_mut().zip(&update) {
+                *value += factor * delta;
+            }
+            NumericError::require_finite("accelerated partitioned state", &candidate)?;
+            acceleration_factor = Some(factor);
+            previous_correction = Some(update.clone());
+            (candidate, factor)
+        } else {
+            backtrack(
+                operator,
+                context,
+                &state,
+                &update,
+                scaled_residual_norm,
+                layout,
+                config,
+            )?
+        };
         current_trace.accepted_damping = Some(damping);
         trace.push(current_trace);
         state = next_state;
@@ -313,7 +344,7 @@ fn solve(
     unreachable!("iteration loop always returns")
 }
 
-fn validate_config(config: &NewtonConfig) -> Result<(), SolveError> {
+fn validate_config(config: &NewtonConfig, strategy: BlockStrategy) -> Result<(), SolveError> {
     let tolerances_valid = config.absolute_tolerance.is_finite()
         && config.absolute_tolerance >= 0.0
         && config.relative_tolerance.is_finite()
@@ -325,6 +356,20 @@ fn validate_config(config: &NewtonConfig) -> Result<(), SolveError> {
         && config.minimum_damping.is_finite()
         && config.minimum_damping > 0.0
         && config.minimum_damping <= config.initial_damping;
+    if let Some(method) = config.acceleration {
+        if strategy == BlockStrategy::Monolithic {
+            return Err(SolveError::InvalidConfiguration {
+                reason: "acceleration requires a partitioned (GaussSeidel/Jacobi) strategy, not \
+                         Monolithic"
+                    .into(),
+            });
+        }
+        if !method.is_valid() {
+            return Err(SolveError::InvalidConfiguration {
+                reason: "acceleration relaxation factor must be finite and in (0, 1]".into(),
+            });
+        }
+    }
     if config.max_iterations == 0
         || config.max_iterations.checked_add(1).is_none()
         || config.max_line_search_steps == 0
@@ -514,7 +559,7 @@ mod tests {
             ..NewtonConfig::default()
         };
         assert!(matches!(
-            validate_config(&config),
+            validate_config(&config, BlockStrategy::Monolithic),
             Err(SolveError::InvalidConfiguration { .. })
         ));
     }

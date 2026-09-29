@@ -112,15 +112,20 @@ pub fn solve_conjugate_gradient(
     NumericError::require_len("initial linear solution", initial_solution.len(), dimension)?;
     NumericError::require_finite("linear right-hand side", right_hand_side)?;
     NumericError::require_finite("initial linear solution", initial_solution)?;
-    if let Some(preconditioner) = preconditioner
-        && preconditioner.dimension() != dimension
-    {
-        return Err(SolveError::InvalidConfiguration {
-            reason: format!(
-                "preconditioner dimension {} differs from operator dimension {dimension}",
-                preconditioner.dimension()
-            ),
-        });
+    if let Some(preconditioner) = preconditioner {
+        if preconditioner.dimension() != dimension {
+            return Err(SolveError::InvalidConfiguration {
+                reason: format!(
+                    "preconditioner dimension {} differs from operator dimension {dimension}",
+                    preconditioner.dimension()
+                ),
+            });
+        }
+        if preconditioner.symmetry() == OperatorSymmetry::Nonsymmetric {
+            return Err(SolveError::InvalidConfiguration {
+                reason: "conjugate gradient refuses a preconditioner declared nonsymmetric".into(),
+            });
+        }
     }
 
     let mut solution = initial_solution.to_vec();

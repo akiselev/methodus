@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod acceleration;
 mod adjoint;
 mod bdf;
 mod block;
@@ -23,6 +24,10 @@ mod sparse;
 mod transpose;
 mod verification;
 
+pub use acceleration::{
+    AccelerationConfig, AccelerationIteration, AccelerationMethod, AccelerationReport,
+    FixedPointOperator, accelerate_fixed_point,
+};
 pub use adjoint::{AdjointConfig, AdjointSolveReport, ResidualAcceptance, solve_adjoint};
 pub use bdf::{
     AcceptedStep, BdfConfig, BdfOrder, BdfState, LocatedEvent, RejectedStep, StepOutcome,
@@ -61,7 +66,8 @@ pub use operator::{
     verify_dae_jvp, verify_jvp,
 };
 pub use preconditioner::{
-    BlockDiagonalPreconditioner, BlockLowerTriangularPreconditioner, CompositeBlockPreconditioner,
+    BlockCouplingAction, BlockDiagonalPreconditioner, BlockGaussSeidelPreconditioner,
+    BlockLowerTriangularPreconditioner, CompositeBlockPreconditioner, GaussSeidelSweep,
     JacobiFactory, LowerBlock,
 };
 pub use sparse::CsrMatrix;
