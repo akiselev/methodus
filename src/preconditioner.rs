@@ -361,6 +361,16 @@ pub trait BlockCouplingAction: Send + Sync {
         input: &[f64],
         output: &mut [f64],
     ) -> Result<(), NumericError>;
+    /// Owner declaration that this action is the exact transpose of the
+    /// coupling supplied at the named `(row_block, column_block)` pair —
+    /// necessarily `(self.column_block(), self.row_block())`; naming any
+    /// other pair is refused at construction. `None` (the default)
+    /// declares nothing. [`BlockGaussSeidelPreconditioner`] declares its
+    /// symmetric sweep `Symmetric` only over a coupling set closed under
+    /// such declarations.
+    fn transpose_of(&self) -> Option<(usize, usize)> {
+        None
+    }
 }
 
 /// Sweep pattern for [`BlockGaussSeidelPreconditioner`].
@@ -374,7 +384,9 @@ pub enum GaussSeidelSweep {
     /// every supplied coupling has `column_block > row_block`.
     Backward,
     /// A forward sweep followed by a backward sweep, each continuing from
-    /// the other's result (symmetric/SSOR-style Gauss-Seidel).
+    /// the other's result (symmetric/SSOR-style Gauss-Seidel): the action
+    /// is `(D+U)⁻¹ D (D+L)⁻¹` for `D` the inverses of the diagonal solves
+    /// and `L`/`U` the strictly lower/upper coupling blocks.
     Symmetric,
 }
 
@@ -465,6 +477,17 @@ impl<'a> BlockGaussSeidelPreconditioner<'a> {
                     ),
                 });
             }
+            if let Some(declared) = coupling.transpose_of()
+                && declared != (column, row)
+            {
+                return Err(NumericError::InvalidInput {
+                    message: format!(
+                        "block Gauss-Seidel coupling {index} (block pair ({row}, {column})) \
+                         declares itself the transpose of block pair {declared:?}; its \
+                         transpose can only be the coupling at ({column}, {row})"
+                    ),
+                });
+            }
         }
         Ok(Self {
             layout,
@@ -472,6 +495,26 @@ impl<'a> BlockGaussSeidelPreconditioner<'a> {
             couplings,
             sweep,
         })
+    }
+
+    /// Whether the coupling set is closed under transposition by owner
+    /// declaration: every supplied block pair `(i, j)` and its mirror
+    /// `(j, i)` are each supplied by exactly one action, and both declare
+    /// [`BlockCouplingAction::transpose_of`] the other. Summed multiples
+    /// on a pair cannot be paired with their transposes, so they never
+    /// qualify.
+    fn couplings_are_declared_transposes(&self) -> bool {
+        let mut supplied = std::collections::BTreeMap::<(usize, usize), usize>::new();
+        for coupling in &self.couplings {
+            let pair = (coupling.row_block(), coupling.column_block());
+            if coupling.transpose_of() != Some((pair.1, pair.0)) {
+                return false;
+            }
+            *supplied.entry(pair).or_insert(0) += 1;
+        }
+        supplied
+            .iter()
+            .all(|(&(row, column), &count)| count == 1 && supplied.get(&(column, row)) == Some(&1))
     }
 
     fn apply_sweep(
@@ -510,19 +553,38 @@ impl Preconditioner for BlockGaussSeidelPreconditioner<'_> {
         self.layout.dimension()
     }
 
-    // Only a symmetric sweep whose every diagonal solve is itself declared
-    // symmetric earns a symmetric declaration; forward/backward
-    // (triangular) sweeps are nonsymmetric in general.
+    // Declared, never assumed. Forward/backward (triangular) sweeps are
+    // nonsymmetric in general. The symmetric sweep's action
+    // `(D+U)⁻¹ D (D+L)⁻¹` is symmetric exactly when every `D_i` is
+    // symmetric and `U = Lᵀ`, so it is declared `Symmetric` only when every
+    // diagonal solve declares `Symmetric` and the coupling set is closed
+    // under owner-declared transposition; it is `Nonsymmetric` when any
+    // diagonal solve declares `Nonsymmetric` (then `M⁻¹` inherits it), and
+    // `Unknown` otherwise — including a one-directional coupling set, which
+    // is `(D+L)⁻¹` and must never be called symmetric.
     fn symmetry(&self) -> OperatorSymmetry {
-        if self.sweep == GaussSeidelSweep::Symmetric
-            && self
-                .diagonal_solves
-                .iter()
-                .all(|solve| solve.symmetry() == OperatorSymmetry::Symmetric)
-        {
-            OperatorSymmetry::Symmetric
-        } else {
-            OperatorSymmetry::Nonsymmetric
+        match self.sweep {
+            GaussSeidelSweep::Forward | GaussSeidelSweep::Backward => {
+                OperatorSymmetry::Nonsymmetric
+            }
+            GaussSeidelSweep::Symmetric => {
+                let inner = self
+                    .diagonal_solves
+                    .iter()
+                    .map(|solve| solve.symmetry())
+                    .collect::<Vec<_>>();
+                if inner.contains(&OperatorSymmetry::Nonsymmetric) {
+                    OperatorSymmetry::Nonsymmetric
+                } else if inner
+                    .iter()
+                    .all(|symmetry| *symmetry == OperatorSymmetry::Symmetric)
+                    && self.couplings_are_declared_transposes()
+                {
+                    OperatorSymmetry::Symmetric
+                } else {
+                    OperatorSymmetry::Unknown
+                }
+            }
         }
     }
 
@@ -570,6 +632,7 @@ impl BlockPreconditioner for BlockGaussSeidelPreconditioner<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nonlinear::solve_dense;
     use crate::{
         BlockSpec, ConjugateGradientConfig, GmresConfig, LinearOperator, SolveError,
         solve_conjugate_gradient, solve_gmres,
@@ -759,6 +822,67 @@ mod tests {
         }
     }
 
+    /// A dense coupling that declares itself the exact transpose of the
+    /// coupling at its mirror block pair.
+    struct TransposedCoupling(DenseCoupling);
+
+    impl BlockCouplingAction for TransposedCoupling {
+        fn row_block(&self) -> usize {
+            self.0.row
+        }
+
+        fn column_block(&self) -> usize {
+            self.0.column
+        }
+
+        fn apply(
+            &self,
+            context: &EvaluationContext,
+            input: &[f64],
+            output: &mut [f64],
+        ) -> Result<(), NumericError> {
+            self.0.apply(context, input, output)
+        }
+
+        fn transpose_of(&self) -> Option<(usize, usize)> {
+            Some((self.0.column, self.0.row))
+        }
+    }
+
+    fn transposed(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        (0..rows[0].len())
+            .map(|column| rows.iter().map(|row| row[column]).collect())
+            .collect()
+    }
+
+    /// `M⁻¹ e_i` for every unit vector `e_i`: the dense columns of the
+    /// preconditioner's action.
+    fn inverse_columns(preconditioner: &dyn Preconditioner) -> Vec<Vec<f64>> {
+        let dimension = preconditioner.dimension();
+        (0..dimension)
+            .map(|index| {
+                let mut unit = vec![0.0; dimension];
+                unit[index] = 1.0;
+                let mut column = vec![0.0; dimension];
+                preconditioner
+                    .apply_inverse(&EvaluationContext::reproducible(), &unit, &mut column)
+                    .unwrap();
+                column
+            })
+            .collect()
+    }
+
+    /// `max |M⁻¹e_i · e_j − M⁻¹e_j · e_i|` over all unit-vector pairs.
+    fn max_asymmetry(columns: &[Vec<f64>]) -> f64 {
+        let mut worst: f64 = 0.0;
+        for (i, column) in columns.iter().enumerate() {
+            for (j, value) in column.iter().enumerate() {
+                worst = worst.max((value - columns[j][i]).abs());
+            }
+        }
+        worst
+    }
+
     /// An exact dense diagonal-block solve (Gaussian elimination), for
     /// testing exactness independent of an approximate inner solve.
     struct DenseBlockSolve {
@@ -924,53 +1048,110 @@ mod tests {
     }
 
     #[test]
-    fn gauss_seidel_symmetry_declaration_follows_sweep_and_inner_solves() {
+    fn gauss_seidel_symmetry_declaration_follows_sweep_inner_solves_and_coupling_closure() {
         let symmetric_diagonal = DenseBlockSolve {
-            rows: vec![vec![2.0]],
+            rows: vec![vec![4.0]],
             declared_symmetry: OperatorSymmetry::Symmetric,
         };
         let unknown_diagonal = DenseBlockSolve {
-            rows: vec![vec![3.0]],
+            rows: vec![vec![4.0]],
             declared_symmetry: OperatorSymmetry::Unknown,
         };
-        let coupling = DenseCoupling {
+        let nonsymmetric_diagonal = DenseBlockSolve {
+            rows: vec![vec![4.0]],
+            declared_symmetry: OperatorSymmetry::Nonsymmetric,
+        };
+        let lower = DenseCoupling {
             row: 1,
             column: 0,
-            rows: vec![vec![1.5]],
+            rows: vec![vec![1.0]],
         };
+        let lower_transposed = TransposedCoupling(DenseCoupling {
+            row: 1,
+            column: 0,
+            rows: vec![vec![1.0]],
+        });
+        let upper_transposed = TransposedCoupling(DenseCoupling {
+            row: 0,
+            column: 1,
+            rows: vec![vec![1.0]],
+        });
+        fn build<'a>(
+            solves: Vec<&'a dyn Preconditioner>,
+            couplings: Vec<&'a dyn BlockCouplingAction>,
+            sweep: GaussSeidelSweep,
+        ) -> BlockGaussSeidelPreconditioner<'a> {
+            BlockGaussSeidelPreconditioner::new(two_scalar_block_layout(), solves, couplings, sweep)
+                .unwrap()
+        }
 
-        let forward = BlockGaussSeidelPreconditioner::new(
-            two_scalar_block_layout(),
+        // Triangular sweeps are nonsymmetric in general.
+        let forward = build(
             vec![&symmetric_diagonal, &symmetric_diagonal],
-            vec![&coupling],
+            vec![&lower],
             GaussSeidelSweep::Forward,
-        )
-        .unwrap();
-        assert_eq!(forward.symmetry(), OperatorSymmetry::Nonsymmetric);
-
-        let symmetric_sweep_with_symmetric_inner = BlockGaussSeidelPreconditioner::new(
-            two_scalar_block_layout(),
-            vec![&symmetric_diagonal, &symmetric_diagonal],
-            vec![&coupling],
-            GaussSeidelSweep::Symmetric,
-        )
-        .unwrap();
-        assert_eq!(
-            symmetric_sweep_with_symmetric_inner.symmetry(),
-            OperatorSymmetry::Symmetric
         );
+        assert_eq!(forward.symmetry(), OperatorSymmetry::Nonsymmetric);
+        let backward = build(
+            vec![&symmetric_diagonal, &symmetric_diagonal],
+            vec![&lower],
+            GaussSeidelSweep::Backward,
+        );
+        assert_eq!(backward.symmetry(), OperatorSymmetry::Nonsymmetric);
 
-        let symmetric_sweep_with_unknown_inner = BlockGaussSeidelPreconditioner::new(
-            two_scalar_block_layout(),
-            vec![&symmetric_diagonal, &unknown_diagonal],
-            vec![&coupling],
+        // A symmetric sweep over a lower-only coupling set is `(D+L)⁻¹`:
+        // numerically nonsymmetric, so it must never be declared
+        // `Symmetric`; without an owner declaration it is `Unknown`.
+        let lower_only = build(
+            vec![&symmetric_diagonal, &symmetric_diagonal],
+            vec![&lower],
             GaussSeidelSweep::Symmetric,
-        )
-        .unwrap();
+        );
+        assert_eq!(lower_only.symmetry(), OperatorSymmetry::Unknown);
+        assert!(max_asymmetry(&inverse_columns(&lower_only)) > 1.0e-2);
+
+        // One declared direction alone is not closed under transposition.
+        let one_direction = build(
+            vec![&symmetric_diagonal, &symmetric_diagonal],
+            vec![&lower_transposed],
+            GaussSeidelSweep::Symmetric,
+        );
+        assert_eq!(one_direction.symmetry(), OperatorSymmetry::Unknown);
+
+        // Summed multiples on a pair cannot be paired with a transpose.
+        let duplicated = build(
+            vec![&symmetric_diagonal, &symmetric_diagonal],
+            vec![&lower_transposed, &lower_transposed, &upper_transposed],
+            GaussSeidelSweep::Symmetric,
+        );
+        assert_eq!(duplicated.symmetry(), OperatorSymmetry::Unknown);
+
+        // The inner solves gate the declaration even over a closed set.
+        let unknown_inner = build(
+            vec![&symmetric_diagonal, &unknown_diagonal],
+            vec![&lower_transposed, &upper_transposed],
+            GaussSeidelSweep::Symmetric,
+        );
+        assert_eq!(unknown_inner.symmetry(), OperatorSymmetry::Unknown);
+        let nonsymmetric_inner = build(
+            vec![&symmetric_diagonal, &nonsymmetric_diagonal],
+            vec![&lower_transposed, &upper_transposed],
+            GaussSeidelSweep::Symmetric,
+        );
         assert_eq!(
-            symmetric_sweep_with_unknown_inner.symmetry(),
+            nonsymmetric_inner.symmetry(),
             OperatorSymmetry::Nonsymmetric
         );
+
+        // Symmetric inner solves plus a transposition-closed, declared
+        // coupling set: declared `Symmetric`, and numerically symmetric.
+        let closed = build(
+            vec![&symmetric_diagonal, &symmetric_diagonal],
+            vec![&lower_transposed, &upper_transposed],
+            GaussSeidelSweep::Symmetric,
+        );
+        assert_eq!(closed.symmetry(), OperatorSymmetry::Symmetric);
+        assert!(max_asymmetry(&inverse_columns(&closed)) < 1.0e-12);
 
         // Conjugate gradient refuses the forward (declared-nonsymmetric)
         // preconditioner outright, even over a symmetric positive-definite
@@ -990,16 +1171,235 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, SolveError::InvalidConfiguration { .. }));
 
-        // The declared-symmetric symmetric-sweep preconditioner is accepted.
-        solve_conjugate_gradient(
+        // The declared-symmetric closed preconditioner is accepted and the
+        // solve is exact: A = [[4, 1], [1, 4]], b = [1, 1], x = [0.2, 0.2].
+        let report = solve_conjugate_gradient(
             &spd_system,
-            Some(&symmetric_sweep_with_symmetric_inner),
+            Some(&closed),
             &EvaluationContext::reproducible(),
             &[1.0, 1.0],
             &[0.0, 0.0],
             &ConjugateGradientConfig::default(),
         )
         .unwrap();
+        assert!(report.converged);
+        assert!(
+            report
+                .solution
+                .iter()
+                .all(|value| (value - 0.2).abs() < 1.0e-10)
+        );
+    }
+
+    fn three_blocks_of_two() -> BlockLayout {
+        BlockLayout::new(
+            (0..3)
+                .map(|index| BlockSpec {
+                    name: format!("block{index}"),
+                    length: 2,
+                    residual_scale: 1.0,
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn symmetric_gauss_seidel_over_declared_transposed_couplings_is_numerically_symmetric() {
+        // Three 2x2 symmetric diagonal blocks and three coupling pairs with
+        // `A_ji = A_ijᵀ`, each direction declared the other's transpose.
+        let diagonals = [
+            vec![vec![4.0, 1.0], vec![1.0, 4.0]],
+            vec![vec![5.0, 2.0], vec![2.0, 5.0]],
+            vec![vec![6.0, 1.0], vec![1.0, 6.0]],
+        ]
+        .map(|rows| DenseBlockSolve {
+            rows,
+            declared_symmetry: OperatorSymmetry::Symmetric,
+        });
+        let diagonal_refs: Vec<&dyn Preconditioner> = diagonals
+            .iter()
+            .map(|solve| solve as &dyn Preconditioner)
+            .collect();
+        let upper_blocks = [
+            (0, 1, vec![vec![0.5, 0.2], vec![0.1, 0.3]]),
+            (1, 2, vec![vec![0.4, 0.0], vec![0.2, 0.6]]),
+            (0, 2, vec![vec![0.3, 0.1], vec![0.0, 0.2]]),
+        ];
+        let declared: Vec<TransposedCoupling> = upper_blocks
+            .iter()
+            .flat_map(|(row, column, rows)| {
+                [
+                    TransposedCoupling(DenseCoupling {
+                        row: *row,
+                        column: *column,
+                        rows: rows.clone(),
+                    }),
+                    TransposedCoupling(DenseCoupling {
+                        row: *column,
+                        column: *row,
+                        rows: transposed(rows),
+                    }),
+                ]
+            })
+            .collect();
+        let declared_refs: Vec<&dyn BlockCouplingAction> = declared
+            .iter()
+            .map(|coupling| coupling as &dyn BlockCouplingAction)
+            .collect();
+        let preconditioner = BlockGaussSeidelPreconditioner::new(
+            three_blocks_of_two(),
+            diagonal_refs.clone(),
+            declared_refs,
+            GaussSeidelSweep::Symmetric,
+        )
+        .unwrap();
+        assert_eq!(preconditioner.symmetry(), OperatorSymmetry::Symmetric);
+        let columns = inverse_columns(&preconditioner);
+        assert!(max_asymmetry(&columns) < 1.0e-12);
+        // The action genuinely couples blocks (not a trivially symmetric
+        // block-diagonal action).
+        assert!(columns[0][2].abs() > 1.0e-3 && columns[0][4].abs() > 1.0e-3);
+
+        // The same numerically transposed couplings without the owner
+        // declaration are `Unknown`: symmetry is declared, never probed.
+        let undeclared: Vec<&dyn BlockCouplingAction> = declared
+            .iter()
+            .map(|coupling| &coupling.0 as &dyn BlockCouplingAction)
+            .collect();
+        let undeclared_preconditioner = BlockGaussSeidelPreconditioner::new(
+            three_blocks_of_two(),
+            diagonal_refs,
+            undeclared,
+            GaussSeidelSweep::Symmetric,
+        )
+        .unwrap();
+        assert_eq!(
+            undeclared_preconditioner.symmetry(),
+            OperatorSymmetry::Unknown
+        );
+    }
+
+    #[test]
+    fn symmetric_gauss_seidel_action_matches_its_closed_form() {
+        // Three blocks of length two, nonsymmetric couplings in both
+        // directions: one symmetric sweep must equal `(D+U)⁻¹ D (D+L)⁻¹ b`.
+        let (rows, layout) = coupled_dense_system(3, 2);
+        let dimension = rows.len();
+        let diagonal_solves = dense_block_solves(&rows, &layout);
+        let diagonal_refs: Vec<&dyn Preconditioner> = diagonal_solves
+            .iter()
+            .map(|solve| solve as &dyn Preconditioner)
+            .collect();
+        let couplings = dense_couplings(&rows, &layout);
+        let coupling_refs: Vec<&dyn BlockCouplingAction> = couplings
+            .iter()
+            .map(|coupling| coupling as &dyn BlockCouplingAction)
+            .collect();
+        let preconditioner = BlockGaussSeidelPreconditioner::new(
+            layout.clone(),
+            diagonal_refs,
+            coupling_refs,
+            GaussSeidelSweep::Symmetric,
+        )
+        .unwrap();
+        let right_hand_side: Vec<f64> = (1..=dimension).map(|value| value as f64).collect();
+        let mut output = vec![0.0; dimension];
+        preconditioner
+            .apply_inverse(
+                &EvaluationContext::reproducible(),
+                &right_hand_side,
+                &mut output,
+            )
+            .unwrap();
+
+        let block_of = |index: usize| {
+            layout
+                .blocks()
+                .iter()
+                .position(|block| block.range().contains(&index))
+                .unwrap()
+        };
+        let mut diagonal = vec![vec![0.0; dimension]; dimension];
+        let mut diagonal_plus_lower = diagonal.clone();
+        let mut diagonal_plus_upper = diagonal.clone();
+        for (row, values) in rows.iter().enumerate() {
+            for (column, &value) in values.iter().enumerate() {
+                match block_of(row).cmp(&block_of(column)) {
+                    std::cmp::Ordering::Equal => {
+                        diagonal[row][column] = value;
+                        diagonal_plus_lower[row][column] = value;
+                        diagonal_plus_upper[row][column] = value;
+                    }
+                    std::cmp::Ordering::Greater => diagonal_plus_lower[row][column] = value,
+                    std::cmp::Ordering::Less => diagonal_plus_upper[row][column] = value,
+                }
+            }
+        }
+        let forward_only = solve_dense(diagonal_plus_lower, right_hand_side).unwrap();
+        let scaled: Vec<f64> = diagonal
+            .iter()
+            .map(|row| row.iter().zip(&forward_only).map(|(a, b)| a * b).sum())
+            .collect();
+        let expected = solve_dense(diagonal_plus_upper, scaled).unwrap();
+        for (actual, expected) in output.iter().zip(&expected) {
+            assert!(
+                (actual - expected).abs() < 1.0e-10,
+                "{output:?} vs {expected:?}"
+            );
+        }
+        // The backward pass is load-bearing: a forward-only sweep differs.
+        assert!(
+            output
+                .iter()
+                .zip(&forward_only)
+                .any(|(actual, forward)| (actual - forward).abs() > 1.0e-3)
+        );
+    }
+
+    #[test]
+    fn gauss_seidel_refuses_a_contradictory_transpose_declaration() {
+        struct Misdeclared;
+        impl BlockCouplingAction for Misdeclared {
+            fn row_block(&self) -> usize {
+                1
+            }
+
+            fn column_block(&self) -> usize {
+                0
+            }
+
+            fn apply(
+                &self,
+                _context: &EvaluationContext,
+                input: &[f64],
+                output: &mut [f64],
+            ) -> Result<(), NumericError> {
+                output.copy_from_slice(input);
+                Ok(())
+            }
+
+            // Names itself, not its mirror pair (0, 1).
+            fn transpose_of(&self) -> Option<(usize, usize)> {
+                Some((1, 0))
+            }
+        }
+        let a = DenseBlockSolve {
+            rows: vec![vec![2.0]],
+            declared_symmetry: OperatorSymmetry::Symmetric,
+        };
+        let b = DenseBlockSolve {
+            rows: vec![vec![3.0]],
+            declared_symmetry: OperatorSymmetry::Symmetric,
+        };
+        let error = BlockGaussSeidelPreconditioner::new(
+            two_scalar_block_layout(),
+            vec![&a, &b],
+            vec![&Misdeclared],
+            GaussSeidelSweep::Symmetric,
+        )
+        .unwrap_err();
+        assert!(matches!(error, NumericError::InvalidInput { .. }));
     }
 
     #[test]

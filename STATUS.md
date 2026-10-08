@@ -42,9 +42,22 @@ sequence. Same refusal discipline as `JacobiFactory`: no probing, no zero
 replacement, typed refusals for a diagonal-solve count/dimension mismatch, an
 out-of-range or self-coupling block index, and nonfinite input.
 
-Symmetry is declared, not assumed: `Forward`/`Backward` always declare
-`Nonsymmetric`; `Symmetric` declares `Symmetric` only when every diagonal
-solve itself declares `Symmetric`, else `Nonsymmetric`. `Preconditioner`
+Symmetry is declared, not assumed. `Forward`/`Backward` always declare
+`Nonsymmetric`. The symmetric sweep's action is `(D+U)⁻¹ D (D+L)⁻¹`, which
+is symmetric only when every `D_i` is symmetric AND `U = Lᵀ`, so `Symmetric`
+is declared only when every diagonal solve declares `Symmetric` and the
+coupling set is closed under transposition by owner declaration: each
+supplied block pair `(i, j)` and its mirror `(j, i)` are supplied by exactly
+one action each, both returning `BlockCouplingAction::transpose_of` = the
+other pair (a new defaulted trait method; `None` declares nothing, and a
+declaration naming any pair other than the mirror is refused at
+construction). A symmetric sweep with a `Nonsymmetric` diagonal solve
+declares `Nonsymmetric`; everything else (undeclared, one-directional or
+duplicated couplings, an `Unknown` inner solve) declares `Unknown` — never a
+`Symmetric` it cannot justify. (The first cut, `24f9c7d`, checked only the
+inner solves and declared a lower-only coupling set — whose action is the
+nonsymmetric `(D+L)⁻¹` — `Symmetric`, which conjugate gradient then admitted;
+fixed before publication.) `Preconditioner`
 gained a defaulted `symmetry()` method (`Unknown` unless overridden, so every
 preexisting preconditioner is unaffected); `solve_conjugate_gradient` now
 refuses a preconditioner explicitly declared `Nonsymmetric` (an addition — no
@@ -58,8 +71,19 @@ iteration counts on a 2-block and a 3-block coupled dense system, asserted
 exactly — two blocks `(none, jacobi, gs) = (4, 2, 2)`, three blocks
 `(5, 3, 2)` — showing both preconditioners reduce iterations over none, and
 the exact per-block solve is never worse than elementwise Jacobi; the
-symmetry declaration rule including conjugate gradient's refusal of a
-declared-nonsymmetric preconditioner; and every listed refusal.
+symmetry declaration rule
+(`gauss_seidel_symmetry_declaration_follows_sweep_inner_solves_and_coupling_closure`:
+a lower-only symmetric sweep is numerically nonsymmetric and declared
+`Unknown`, a declared transposed pair is numerically symmetric and declared
+`Symmetric` and accepted by conjugate gradient, the forward sweep is refused
+by conjugate gradient); a 3-block, length-2 declared-transposed fixture whose
+`M⁻¹e_i·e_j` equals `M⁻¹e_j·e_i` over all unit vectors to 1e-12 and whose
+undeclared twin is `Unknown`
+(`symmetric_gauss_seidel_over_declared_transposed_couplings_is_numerically_symmetric`);
+the symmetric sweep's action against the closed form `(D+U)⁻¹ D (D+L)⁻¹` on
+a 3-block, length-2 system coupled in both directions, which also proves the
+backward pass is load-bearing (`symmetric_gauss_seidel_action_matches_its_closed_form`);
+the contradictory-declaration refusal; and every listed refusal.
 
 ## SC-W3 iterate-sequence acceleration
 
