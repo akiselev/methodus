@@ -59,9 +59,12 @@ inner solves and declared a lower-only coupling set — whose action is the
 nonsymmetric `(D+L)⁻¹` — `Symmetric`, which conjugate gradient then admitted;
 fixed before publication.) `Preconditioner`
 gained a defaulted `symmetry()` method (`Unknown` unless overridden, so every
-preexisting preconditioner is unaffected); `solve_conjugate_gradient` now
-refuses a preconditioner explicitly declared `Nonsymmetric` (an addition — no
-preexisting preconditioner declares this, so no existing caller is affected).
+preexisting preconditioner is unaffected); `solve_conjugate_gradient` and
+`solve_minres` now refuse a preconditioner explicitly declared
+`Nonsymmetric` (an addition — no preexisting preconditioner declares this,
+so no existing caller is affected; the MINRES twin of the refusal was
+missing in `24f9c7d`, proven by
+`minres_refuses_a_preconditioner_declared_nonsymmetric`).
 `BlockDiagonalPreconditioner` now declares `Symmetric`;
 `BlockLowerTriangularPreconditioner` now declares `Nonsymmetric`.
 
@@ -143,7 +146,8 @@ root package named `methodus` with no subordinate packages.
 - Deterministic MINRES over `LinearOperator`/`Preconditioner`/`NullspaceProjector`, admitting
   declared-`Symmetric` operators of any definiteness (indefinite included, e.g. saddle-point
   Stokes) and refusing `Nonsymmetric`/`Unknown` declarations outright with no caller-assumption
-  escape hatch; a declared positive nullspace dimension refuses unless a `NullspaceProjector` is
+  escape hatch, and (like CG) refusing a preconditioner declared `Nonsymmetric`; a declared
+  positive nullspace dimension refuses unless a `NullspaceProjector` is
   supplied, in which case every Krylov vector and the returned solution stay orthogonal to the
   declared nullspace.
 - Deterministic restarted GMRES over `LinearOperator`/`Preconditioner`, admitting any declared

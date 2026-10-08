@@ -9,7 +9,10 @@
 //!   operator (indefinite allowed, unlike conjugate gradient — that is
 //!   MINRES's point, e.g. a saddle-point Stokes system) and refuses both
 //!   `Nonsymmetric` and `Unknown` declarations outright, with no
-//!   caller-assumption escape hatch. A declared positive nullspace dimension
+//!   caller-assumption escape hatch; a preconditioner declared
+//!   `Nonsymmetric` is refused the same way (the preconditioned Lanczos
+//!   recurrence needs a symmetric preconditioner, as conjugate gradient
+//!   does). A declared positive nullspace dimension
 //!   is refused unless the caller supplies a
 //!   [`crate::NullspaceProjector`], which is applied to keep every Krylov
 //!   vector and the returned solution orthogonal to the declared nullspace
@@ -62,9 +65,12 @@ impl Default for MinresConfig {
 ///
 /// # Errors
 /// Refuses a non-square operator, a declared `Nonsymmetric` or `Unknown`
-/// symmetry, a declared positive nullspace dimension with no supplied
-/// [`NullspaceProjector`], dimension mismatches, non-finite input, and a
-/// non-positive Lanczos inner product (`SolveError::KrylovBreakdown`).
+/// symmetry, a preconditioner declared `Nonsymmetric` (the preconditioned
+/// Lanczos recurrence needs a symmetric preconditioner, exactly as
+/// conjugate gradient does), a declared positive nullspace dimension with
+/// no supplied [`NullspaceProjector`], dimension mismatches, non-finite
+/// input, and a non-positive Lanczos inner product
+/// (`SolveError::KrylovBreakdown`).
 pub fn solve_minres(
     operator: &(impl LinearOperator + ?Sized),
     preconditioner: Option<&dyn Preconditioner>,
@@ -124,15 +130,20 @@ pub fn solve_minres(
     NumericError::require_len("initial minres solution", initial_solution.len(), dimension)?;
     NumericError::require_finite("minres right-hand side", right_hand_side)?;
     NumericError::require_finite("initial minres solution", initial_solution)?;
-    if let Some(preconditioner) = preconditioner
-        && preconditioner.dimension() != dimension
-    {
-        return Err(SolveError::InvalidConfiguration {
-            reason: format!(
-                "preconditioner dimension {} differs from operator dimension {dimension}",
-                preconditioner.dimension()
-            ),
-        });
+    if let Some(preconditioner) = preconditioner {
+        if preconditioner.dimension() != dimension {
+            return Err(SolveError::InvalidConfiguration {
+                reason: format!(
+                    "preconditioner dimension {} differs from operator dimension {dimension}",
+                    preconditioner.dimension()
+                ),
+            });
+        }
+        if preconditioner.symmetry() == OperatorSymmetry::Nonsymmetric {
+            return Err(SolveError::InvalidConfiguration {
+                reason: "minres refuses a preconditioner declared nonsymmetric".into(),
+            });
+        }
     }
 
     let mut x = initial_solution.to_vec();
@@ -895,6 +906,58 @@ mod tests {
         )
         .unwrap();
         assert!(report.converged);
+    }
+
+    #[test]
+    fn minres_refuses_a_preconditioner_declared_nonsymmetric() {
+        use crate::{BlockLayout, BlockLowerTriangularPreconditioner, BlockSpec, LowerBlock};
+
+        // A declared-symmetric SPD operator MINRES accepts on its own...
+        let operator = DeclaredOperator {
+            matrix: CsrMatrix::from_triplets(2, 2, vec![(0, 0, 2.0), (1, 1, 2.0)]).unwrap(),
+            properties: OperatorProperties::from_symmetry(OperatorSymmetry::Symmetric),
+        };
+        // ...with a block-lower-triangular preconditioner, which declares
+        // itself `Nonsymmetric`: refused before any iteration, the twin of
+        // conjugate gradient's refusal.
+        let layout = BlockLayout::new(vec![
+            BlockSpec {
+                name: "a".into(),
+                length: 1,
+                residual_scale: 1.0,
+            },
+            BlockSpec {
+                name: "b".into(),
+                length: 1,
+                residual_scale: 1.0,
+            },
+        ])
+        .unwrap();
+        let preconditioner = BlockLowerTriangularPreconditioner::new(
+            layout,
+            vec![0.5, 0.5],
+            vec![LowerBlock {
+                row_block: 1,
+                column_block: 0,
+                values: vec![0.1],
+            }],
+        )
+        .unwrap();
+        assert_eq!(preconditioner.symmetry(), OperatorSymmetry::Nonsymmetric);
+        let error = solve_minres(
+            &operator,
+            Some(&preconditioner),
+            None,
+            &EvaluationContext::default(),
+            &[1.0, 1.0],
+            &[0.0; 2],
+            &MinresConfig::default(),
+        )
+        .unwrap_err();
+        match error {
+            SolveError::InvalidConfiguration { reason } => assert!(reason.contains("nonsymmetric")),
+            other => panic!("expected a typed configuration refusal, got {other:?}"),
+        }
     }
 
     #[test]
