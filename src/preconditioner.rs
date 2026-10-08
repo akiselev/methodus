@@ -311,6 +311,27 @@ impl Preconditioner for CompositeBlockPreconditioner<'_> {
         self.layout.dimension()
     }
 
+    // A block-diagonal composition is exactly as symmetric as its blocks:
+    // `Nonsymmetric` if any block declares `Nonsymmetric`, `Symmetric` if
+    // every block declares `Symmetric`, `Unknown` otherwise.
+    fn symmetry(&self) -> OperatorSymmetry {
+        let declared = self
+            .blocks
+            .iter()
+            .map(|block| block.symmetry())
+            .collect::<Vec<_>>();
+        if declared.contains(&OperatorSymmetry::Nonsymmetric) {
+            OperatorSymmetry::Nonsymmetric
+        } else if declared
+            .iter()
+            .all(|symmetry| *symmetry == OperatorSymmetry::Symmetric)
+        {
+            OperatorSymmetry::Symmetric
+        } else {
+            OperatorSymmetry::Unknown
+        }
+    }
+
     fn apply_inverse(
         &self,
         context: &EvaluationContext,
@@ -746,6 +767,88 @@ mod tests {
             )
             .unwrap();
         assert_eq!(output, vec![1.0, 2.0, 6.0]);
+    }
+
+    #[test]
+    fn composite_block_preconditioner_symmetry_follows_its_blocks() {
+        let saddle_layout = || {
+            BlockLayout::new(vec![
+                BlockSpec {
+                    name: "velocity".into(),
+                    length: 2,
+                    residual_scale: 1.0,
+                },
+                BlockSpec {
+                    name: "pressure".into(),
+                    length: 1,
+                    residual_scale: 1.0,
+                },
+            ])
+            .unwrap()
+        };
+        let velocity_layout = BlockLayout::new(vec![
+            BlockSpec {
+                name: "u".into(),
+                length: 1,
+                residual_scale: 1.0,
+            },
+            BlockSpec {
+                name: "v".into(),
+                length: 1,
+                residual_scale: 1.0,
+            },
+        ])
+        .unwrap();
+        let symmetric_velocity =
+            BlockDiagonalPreconditioner::new(velocity_layout.clone(), vec![0.5, 0.25]).unwrap();
+        let nonsymmetric_velocity = BlockLowerTriangularPreconditioner::new(
+            velocity_layout,
+            vec![0.5, 0.25],
+            vec![LowerBlock {
+                row_block: 1,
+                column_block: 0,
+                values: vec![0.1],
+            }],
+        )
+        .unwrap();
+        let unknown_velocity = DenseBlockSolve {
+            rows: vec![vec![2.0, 0.0], vec![0.0, 4.0]],
+            declared_symmetry: OperatorSymmetry::Unknown,
+        };
+        let pressure = BlockDiagonalPreconditioner::new(
+            BlockLayout::new(vec![BlockSpec {
+                name: "pressure".into(),
+                length: 1,
+                residual_scale: 1.0,
+            }])
+            .unwrap(),
+            vec![2.0],
+        )
+        .unwrap();
+        assert_eq!(
+            CompositeBlockPreconditioner::new(
+                saddle_layout(),
+                vec![&symmetric_velocity, &pressure]
+            )
+            .unwrap()
+            .symmetry(),
+            OperatorSymmetry::Symmetric
+        );
+        assert_eq!(
+            CompositeBlockPreconditioner::new(saddle_layout(), vec![&unknown_velocity, &pressure])
+                .unwrap()
+                .symmetry(),
+            OperatorSymmetry::Unknown
+        );
+        assert_eq!(
+            CompositeBlockPreconditioner::new(
+                saddle_layout(),
+                vec![&nonsymmetric_velocity, &pressure]
+            )
+            .unwrap()
+            .symmetry(),
+            OperatorSymmetry::Nonsymmetric
+        );
     }
 
     #[test]
@@ -1625,8 +1728,13 @@ mod tests {
             &GmresConfig {
                 max_iterations: 200,
                 restart: 200,
-                absolute_tolerance: 2.0e-3,
-                relative_tolerance: 0.0,
+                // Relative, not absolute: GMRES is left-preconditioned and
+                // its residual norms are `‖M⁻¹(b - Ax)‖`, scaled differently
+                // by each `M`; a relative tolerance on that norm measures
+                // every run against its own initial preconditioned residual,
+                // so the counts are comparable.
+                absolute_tolerance: 0.0,
+                relative_tolerance: 1.0e-3,
             },
         )
         .unwrap();
@@ -1662,11 +1770,12 @@ mod tests {
         )
         .unwrap();
         let gs = gmres_iterations(rows, Some(&gauss_seidel), layout.dimension());
-        // Both preconditioners measurably reduce the iteration count
-        // needed against no preconditioner; block Gauss-Seidel's exact
-        // per-block (rather than elementwise) diagonal solve is never
-        // worse than plain Jacobi.
-        assert_eq!((none, jacobi, gs), (4, 2, 2));
+        // What the counts prove: block Gauss-Seidel's exact per-block
+        // solve with multiplicative coupling needs fewer iterations than
+        // both elementwise Jacobi and no preconditioner; elementwise
+        // Jacobi, which only rescales rows of a strongly intra-block-coupled
+        // system, does not reduce the count at all at two blocks.
+        assert_eq!((none, jacobi, gs), (3, 3, 2));
     }
 
     #[test]
@@ -1697,8 +1806,9 @@ mod tests {
         )
         .unwrap();
         let gs = gmres_iterations(rows, Some(&gauss_seidel), layout.dimension());
-        // Here the exact per-block solve also measurably beats elementwise
-        // Jacobi, not only no preconditioner.
-        assert_eq!((none, jacobi, gs), (5, 3, 2));
+        // What the counts prove: at three blocks both preconditioners
+        // reduce the count, and block Gauss-Seidel reduces it by more than
+        // elementwise Jacobi.
+        assert_eq!((none, jacobi, gs), (5, 4, 2));
     }
 }

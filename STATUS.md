@@ -1,5 +1,18 @@
 # Methodus status
 
+2026-10-08 review fixes on `24f9c7d` before publication (W9 fix lane):
+`NewtonConfig` serialized bytes unchanged (`acceleration` skipped while
+`None`); the symmetric Gauss-Seidel sweep declares `Symmetric` only over
+owner-declared transposed couplings (new defaulted
+`BlockCouplingAction::transpose_of`), else `Unknown`/`Nonsymmetric`; MINRES
+refuses a preconditioner declared `Nonsymmetric`; fixed-point acceleration
+tests convergence before computing an Aitken factor, judges breakdown
+relative to the residual scale, records each factor on the entry it was
+applied to, and refuses non-convergence as
+`SolveError::AccelerationNotConverged { trace }`; `CompositeBlockPreconditioner`
+declares symmetry from its blocks; the GMRES count tests compare runs under
+a relative tolerance. Details in the two SC-W3 sections.
+
 2026-09-29 SC-W3 preconditioners/acceleration landed (W9 lane): composite block
 Gauss-Seidel/triangular preconditioners beyond Jacobi, and iterate-sequence
 acceleration (fixed relaxation, Aitken) over `&[f64]` fixed-point sequences,
@@ -12,7 +25,7 @@ diagonal preconditioner and refuses missing/zero/nonfinite diagonals without
 probing or fallback. Owner gate passed: 100 tests; final consumer acceptance
 passed (210 tests across 35 targets, documented external-fixture retry).
 
-Updated: 2026-09-29
+Updated: 2026-10-08
 Branch: `master`
 Milestone: SC-W3 composite block preconditioners and acceleration (this lane);
 existing numerical algorithms and execution behavior unchanged (default
@@ -66,14 +79,24 @@ so no existing caller is affected; the MINRES twin of the refusal was
 missing in `24f9c7d`, proven by
 `minres_refuses_a_preconditioner_declared_nonsymmetric`).
 `BlockDiagonalPreconditioner` now declares `Symmetric`;
-`BlockLowerTriangularPreconditioner` now declares `Nonsymmetric`.
+`BlockLowerTriangularPreconditioner` now declares `Nonsymmetric`;
+`CompositeBlockPreconditioner` (block-diagonal composition) declares
+`Nonsymmetric` if any block declares `Nonsymmetric`, `Symmetric` if every
+block declares `Symmetric`, else `Unknown`
+(`composite_block_preconditioner_symmetry_follows_its_blocks`).
 
 Proof: exact one-application solve of a block-triangular system for both
 `Forward` and `Backward` (`preconditioner.rs` tests); measured GMRES
-iteration counts on a 2-block and a 3-block coupled dense system, asserted
-exactly — two blocks `(none, jacobi, gs) = (4, 2, 2)`, three blocks
-`(5, 3, 2)` — showing both preconditioners reduce iterations over none, and
-the exact per-block solve is never worse than elementwise Jacobi; the
+iteration counts to a relative `1e-3` reduction of the (left-)preconditioned
+residual on a 2-block and a 3-block coupled dense system of length-3
+blocks, asserted exactly — two blocks `(none, jacobi, gs) = (3, 3, 2)`,
+three blocks `(5, 4, 2)`. Exactly what these counts prove: forward block
+Gauss-Seidel needs fewer GMRES iterations than both elementwise Jacobi and
+no preconditioner at 2 and 3 blocks; elementwise Jacobi ties no
+preconditioner at 2 blocks and beats it at 3. (`24f9c7d` compared the runs
+under an absolute tolerance on residual norms that each left preconditioner
+scales differently — `(4, 2, 2)`/`(5, 3, 2)` — not a like-for-like
+comparison; fixed before publication.) Also proven: the
 symmetry declaration rule
 (`gauss_seidel_symmetry_declaration_follows_sweep_inner_solves_and_coupling_closure`:
 a lower-only symmetric sweep is numerically nonsymmetric and declared
@@ -233,10 +256,11 @@ scientific-stack repository.
 
 ## Validation
 
-- `cargo test -p methodus --lib`: 79 tests passed, none failed or ignored.
+- `cargo test -p methodus --lib`: 91 tests passed, none failed or ignored
+  (79 at `24f9c7d`, plus 12 review-fix tests).
 - `cargo test -p methodus --test <name>` for each of `adjoint` (9),
   `coupling_strategies` (4), `newton_krylov` (12), `time_integration` (7),
-  `time_restart_events` (2), `transpose` (3): all passed. 116 tests total.
+  `time_restart_events` (2), `transpose` (3): all passed. 128 tests total.
 - `cargo fmt -p methodus -- --check`: passed.
 - `cargo clippy -p methodus --all-targets --all-features -- -D warnings`: passed.
 - `RUSTDOCFLAGS='-D warnings' cargo doc -p methodus --no-deps`: passed.
