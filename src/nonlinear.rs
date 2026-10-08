@@ -57,6 +57,11 @@ pub struct IterationTrace {
     pub residual_norm: f64,
     pub scaled_residual_norm: f64,
     pub block_residual_norms: Vec<(String, f64)>,
+    /// The line-search damping accepted at this iteration — or, when
+    /// [`NewtonConfig::acceleration`] is set on a partitioned solve, the
+    /// relaxation factor applied to the partitioned correction, which
+    /// Aitken does not bound to `(0, 1]` (it may be negative or exceed 1).
+    /// `None` on the terminal entry.
     pub accepted_damping: Option<f64>,
 }
 

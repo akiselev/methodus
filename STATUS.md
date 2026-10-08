@@ -94,18 +94,39 @@ the contradictory-declaration refusal; and every listed refusal.
 and `accelerate_fixed_point` drive `x_{k+1} = x_k + factor*(G(x_k) - x_k)`
 under `AccelerationMethod::FixedRelaxation` (constant factor) or `::Aitken`
 (vector Δ², factor recomputed each iteration from the two most recent
-fixed-point residuals). Typed report: per-iteration residual norm and
-relaxation factor used. Typed refusals, never NaN or a silent unconverged
+fixed-point residuals). Typed report: per-iteration residual norm and the
+relaxation factor applied to that iterate (`None` on the terminal entry,
+where nothing is applied; replaying the recorded factors reproduces the
+returned state bit for bit). Convergence is tested before any factor is
+computed, so a converged sequence is never refused as a breakdown, and the
+Aitken degenerate-denominator test is relative —
+`‖Δr‖² ≤ 1e-16·max(‖r_k‖², ‖r_{k-1}‖²)`, plus exactly zero/non-finite —
+hence scale-invariant. Typed refusals, never NaN or a silent unconverged
 iterate: nonfinite evaluation/state (`NumericError`), a degenerate Aitken
 denominator (`SolveError::AccelerationBreakdown`), and exhausting
-`max_iterations` without meeting tolerance (`SolveError::NotConverged`).
+`max_iterations` without meeting tolerance
+(`SolveError::AccelerationNotConverged`, a new variant carrying the full
+trace; the existing `SolveError::NotConverged` is untouched). (The first
+cut `24f9c7d` used an absolute `1e-14` floor evaluated before the
+convergence test, so a converged or small-scale sequence was refused as a
+breakdown — the contractive fixture at `absolute_tolerance = 1e-9` failed
+with `AccelerationBreakdown { iteration: 8 }` — and non-convergence dropped
+the trace; fixed before publication.)
 
 Integrated into `solve_blocks` as `NewtonConfig.acceleration:
 Option<AccelerationMethod>` (`#[serde(default, skip_serializing_if =
 "Option::is_none")]`, `None` by default): when
 set, a `GaussSeidel`/`Jacobi` outer iteration relaxes its partitioned Newton
 correction by the accelerator instead of backtracking (the correction vector
-itself is the fixed-point residual; no extra `G` evaluation). Refused with
+itself is the fixed-point residual; no extra `G` evaluation).
+`IterationTrace.accepted_damping` then carries the relaxation factor applied
+at that iteration, which Aitken does not bound to `(0, 1]` (it may be
+negative or exceed 1), unlike the line-search damping. The Aitken history
+(previous correction and factor) lives inside one `solve_blocks` call, so
+Krasis's per-sweep driver (one `solve_blocks` call with `max_iterations = 1`
+per sweep) cannot consume this path — its history resets every call; the
+consumable shape for a sweep loop is `accelerate_fixed_point` with a
+`FixedPointOperator` wrapping one sweep. Refused with
 `Monolithic` (no partitioned fixed-point sequence exists there). No new
 entry point; every existing `solve_blocks` call behaves identically because
 the field defaults to `None` (exhaustive `NewtonConfig` literals must name
@@ -113,9 +134,16 @@ the field; see Milestone).
 
 Proof: a contractive 2-block linear fixed point where Aitken converges in
 provably fewer iterations than plain iteration, counts asserted exactly
-(`(plain, aitken) = (111, 8)`); a divergent full-step iteration refused as
-`NotConverged`; a degenerate-denominator refusal; a nonfinite-evaluation
-refusal; relaxation-factor bounds `(0, 1]` refused outside that range; and,
+(`(plain, aitken) = (111, 8)` at `absolute_tolerance = 1e-6`; 10
+evaluations at `1e-9`, where `24f9c7d` broke down); the same sequence at
+scale `1e-9` converging in the same iterations with the same factors
+(`aitken_degeneracy_test_is_scale_invariant`); the trace replay
+(`trace_records_each_factor_on_the_entry_it_was_applied_to`); a divergent
+full-step iteration refused as `AccelerationNotConverged` with all 21
+residual norms strictly growing; exact-zero and near-stalling (relative, at
+scales `1e-9`, `1`, `1e4`) degenerate-denominator refusals; a
+nonfinite-evaluation refusal; relaxation-factor bounds `(0, 1]` refused
+outside that range; and,
 in `solve_blocks`, a strongly-coupled (0.99) 2-block system that an
 unaccelerated `GaussSeidel` fails to converge on (existing test) now
 converges under Aitken acceleration, plus the `Monolithic` refusal.

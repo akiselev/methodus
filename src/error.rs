@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::acceleration::AccelerationIteration;
+
 /// Failure reported while evaluating a numerical operator.
 #[derive(Clone, Debug, PartialEq, Eq, Error, Serialize, Deserialize)]
 pub enum NumericError {
@@ -79,6 +81,11 @@ pub enum SolveError {
     KrylovBreakdown { iteration: usize },
     #[error("fixed-point acceleration iteration {iteration} broke down: {reason}")]
     AccelerationBreakdown { iteration: usize, reason: String },
+    /// `accelerate_fixed_point` exhausted its iteration budget without
+    /// meeting tolerance; `trace` is the complete per-iteration evidence
+    /// (one entry per evaluation, the terminal one without a factor).
+    #[error("fixed-point acceleration did not converge within {} evaluations", .trace.len())]
+    AccelerationNotConverged { trace: Vec<AccelerationIteration> },
 }
 
 #[cfg(test)]
