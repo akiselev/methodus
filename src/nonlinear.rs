@@ -29,8 +29,10 @@ pub struct NewtonConfig {
     /// search. `None` (the default) leaves every existing solve
     /// unchanged. Refused with `Monolithic` (SC-W3): acceleration targets
     /// the partitioned fixed-point sequence, which a monolithic solve
-    /// does not form.
-    #[serde(default)]
+    /// does not form. Skipped from serialization while `None`, so the
+    /// serialized bytes of every pre-existing `NewtonConfig` value (hashed
+    /// into consumer identities) are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acceleration: Option<AccelerationMethod>,
 }
 
@@ -562,5 +564,44 @@ mod tests {
             validate_config(&config, BlockStrategy::Monolithic),
             Err(SolveError::InvalidConfiguration { .. })
         ));
+    }
+
+    /// The exact bytes `NewtonConfig::default()` serialized to before the
+    /// `acceleration` field existed (commit `6ba269c`). Consumers hash this
+    /// value into recorded identities, so it must not change.
+    const PRE_ACCELERATION_DEFAULT_JSON: &str = "{\"max_iterations\":50,\
+        \"absolute_tolerance\":1e-10,\"relative_tolerance\":1e-8,\
+        \"initial_damping\":1.0,\"minimum_damping\":0.0001,\
+        \"max_line_search_steps\":12}";
+
+    #[test]
+    fn default_configuration_serializes_to_its_pre_acceleration_bytes() {
+        assert_eq!(
+            serde_json::to_string(&NewtonConfig::default()).unwrap(),
+            PRE_ACCELERATION_DEFAULT_JSON
+        );
+    }
+
+    #[test]
+    fn a_payload_without_the_acceleration_key_deserializes_to_none() {
+        let config: NewtonConfig = serde_json::from_str(PRE_ACCELERATION_DEFAULT_JSON).unwrap();
+        assert_eq!(config, NewtonConfig::default());
+        assert_eq!(config.acceleration, None);
+    }
+
+    #[test]
+    fn an_acceleration_payload_round_trips() {
+        let json = "{\"max_iterations\":50,\"absolute_tolerance\":1e-10,\
+            \"relative_tolerance\":1e-8,\"initial_damping\":1.0,\
+            \"minimum_damping\":0.0001,\"max_line_search_steps\":12,\
+            \"acceleration\":{\"aitken\":{\"initial_factor\":0.5}}}";
+        let config: NewtonConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.acceleration,
+            Some(AccelerationMethod::Aitken {
+                initial_factor: 0.5
+            })
+        );
+        assert_eq!(serde_json::to_string(&config).unwrap(), json);
     }
 }

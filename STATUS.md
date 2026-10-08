@@ -15,9 +15,19 @@ passed (210 tests across 35 targets, documented external-fixture retry).
 Updated: 2026-09-29
 Branch: `master`
 Milestone: SC-W3 composite block preconditioners and acceleration (this lane);
-existing numerical algorithms, serialized state and execution behavior
-unchanged (default `NewtonConfig`/`solve_blocks` output is bit-for-bit
-identical — acceleration is opt-in via a new `None`-default field).
+existing numerical algorithms and execution behavior unchanged (default
+`NewtonConfig`/`solve_blocks` output is bit-for-bit identical; acceleration
+is opt-in via a new `None`-default field). Compatibility, stated exactly:
+`NewtonConfig` gained a public field, so an exhaustive struct literal must
+add it — a source change in consumers (Sinbad's `resolve_newton`, live
+sinbad `113900e`). The serialized bytes of every existing value are
+unchanged: `acceleration` is skipped while `None`
+(`skip_serializing_if = "Option::is_none"`), asserted in `nonlinear.rs`
+against the exact pre-field literal of `NewtonConfig::default()`; an old
+payload without the key deserializes to `None`, and an Aitken payload
+round-trips. (The first cut of this lane, `24f9c7d`, serialized an extra
+`"acceleration":null`, which would have changed the `NewtonConfig` hash in
+Krasis's consistent-initialization identities; fixed before publication.)
 
 ## SC-W3 composite block preconditioners
 
@@ -64,13 +74,15 @@ denominator (`SolveError::AccelerationBreakdown`), and exhausting
 `max_iterations` without meeting tolerance (`SolveError::NotConverged`).
 
 Integrated into `solve_blocks` as `NewtonConfig.acceleration:
-Option<AccelerationMethod>` (`#[serde(default)]`, `None` by default): when
+Option<AccelerationMethod>` (`#[serde(default, skip_serializing_if =
+"Option::is_none")]`, `None` by default): when
 set, a `GaussSeidel`/`Jacobi` outer iteration relaxes its partitioned Newton
 correction by the accelerator instead of backtracking (the correction vector
 itself is the fixed-point residual; no extra `G` evaluation). Refused with
 `Monolithic` (no partitioned fixed-point sequence exists there). No new
-entry point; every existing `solve_blocks`/`NewtonConfig` caller is
-unaffected because the field defaults to `None`.
+entry point; every existing `solve_blocks` call behaves identically because
+the field defaults to `None` (exhaustive `NewtonConfig` literals must name
+the field; see Milestone).
 
 Proof: a contractive 2-block linear fixed point where Aitken converges in
 provably fewer iterations than plain iteration, counts asserted exactly
