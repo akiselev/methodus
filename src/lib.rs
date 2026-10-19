@@ -11,6 +11,7 @@ mod bdf;
 mod block;
 mod context;
 mod error;
+mod explicit;
 mod krylov;
 mod krylov_method;
 mod least_squares;
@@ -21,6 +22,7 @@ mod nullspace;
 mod operator;
 mod preconditioner;
 mod sparse;
+mod spectral;
 mod transpose;
 mod verification;
 
@@ -38,6 +40,12 @@ pub use block::{
 };
 pub use context::EvaluationContext;
 pub use error::{NumericError, SolveError};
+pub use explicit::{
+    Admissibility, ButcherForm, ExplicitAcceptedStep, ExplicitConfig, ExplicitIntegrationReport,
+    ExplicitOperator, ExplicitRejectedStep, ExplicitRejection, ExplicitScheme, ExplicitState,
+    ExplicitStepOutcome, ExplicitStepReport, InvariantBalance, ShuOsherTableau, StepLimit,
+    StepPolicy, explicit_step, integrate_explicit,
+};
 pub use krylov::{
     BiCgStabConfig, GmresConfig, GmresReport, MinresConfig, solve_bicgstab, solve_gmres,
     solve_minres,
@@ -71,6 +79,7 @@ pub use preconditioner::{
     JacobiFactory, LowerBlock,
 };
 pub use sparse::CsrMatrix;
+pub use spectral::{SpectralRadiusReport, estimate_spectral_radius};
 pub use transpose::{
     TransposableOperator, TransposeOperator, TransposeSource, transpose_view,
     verify_adjoint_identity,

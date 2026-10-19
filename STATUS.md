@@ -1,179 +1,127 @@
 # Methodus status
 
-2026-10-08 review fixes on `24f9c7d` before publication (W9 fix lane):
-`NewtonConfig` serialized bytes unchanged (`acceleration` skipped while
-`None`); the symmetric Gauss-Seidel sweep declares `Symmetric` only over
-owner-declared transposed couplings (new defaulted
-`BlockCouplingAction::transpose_of`), else `Unknown`/`Nonsymmetric`; MINRES
-refuses a preconditioner declared `Nonsymmetric`; fixed-point acceleration
-tests convergence before computing an Aitken factor, judges breakdown
-relative to the residual scale, records each factor on the entry it was
-applied to, and refuses non-convergence as
-`SolveError::AccelerationNotConverged { trace }`; `CompositeBlockPreconditioner`
-declares symmetry from its blocks; the GMRES count tests compare runs under
-a relative tolerance. Details in the two SC-W3 sections.
-
-2026-09-29 SC-W3 preconditioners/acceleration landed (W9 lane): composite block
-Gauss-Seidel/triangular preconditioners beyond Jacobi, and iterate-sequence
-acceleration (fixed relaxation, Aitken) over `&[f64]` fixed-point sequences,
-wired as an opt-in `solve_blocks` option. See "SC-W3 composite block
-preconditioners" and "SC-W3 iterate-sequence acceleration" below.
-
-2026-09-18 bounded implementation accepted: SC-W3 optional owner-provided
-linear/nonlinear/DAE diagonals; `JacobiFactory` consumes the existing block
-diagonal preconditioner and refuses missing/zero/nonfinite diagonals without
-probing or fallback. Owner gate passed: 100 tests; final consumer acceptance
-passed (210 tests across 35 targets, documented external-fixture retry).
-
-Updated: 2026-10-08
+Updated: 2026-10-19
 Branch: `master`
-Milestone: SC-W3 composite block preconditioners and acceleration (this lane);
-existing numerical algorithms and execution behavior unchanged (default
-`NewtonConfig`/`solve_blocks` output is bit-for-bit identical; acceleration
-is opt-in via a new `None`-default field). Compatibility, stated exactly:
-`NewtonConfig` gained a public field, so an exhaustive struct literal must
-add it — a source change in consumers (Sinbad's `resolve_newton`, live
-sinbad `113900e`). The serialized bytes of every existing value are
-unchanged: `acceleration` is skipped while `None`
-(`skip_serializing_if = "Option::is_none"`), asserted in `nonlinear.rs`
-against the exact pre-field literal of `NewtonConfig::default()`; an old
-payload without the key deserializes to `None`, and an Aitken payload
-round-trips. (The first cut of this lane, `24f9c7d`, serialized an extra
-`"acceleration":null`, which would have changed the `NewtonConfig` hash in
-Krasis's consistent-initialization identities; fixed before publication.)
+Milestone: SV2-C4 explicit SSP Runge–Kutta / method-of-lines contract (W12
+lane L2), on top of SC-W3 composite block preconditioners and acceleration.
+Compatibility: purely additive. No existing type, serialized shape, default
+or algorithm changed (no existing file but `lib.rs`/`error.rs` touched);
+`SolveError` gained four variants (it is not `Serialize`; an exhaustive
+`match` on it in a consumer would need new arms — none found in live
+Krasis/Sinbad/Finitum). The 128 preexisting owner tests pass unchanged.
 
-## SC-W3 composite block preconditioners
+## SV2-C4 explicit method-of-lines stepping
 
-`BlockGaussSeidelPreconditioner` (`preconditioner.rs`): an owner-supplied
-`BlockLayout`, one owner-supplied diagonal-block `Preconditioner` per block
-(the existing `BlockDiagonalPreconditioner`/Jacobi, a dense per-block solve,
-or an owner inner Krylov solve), and owner-supplied off-diagonal
-`BlockCouplingAction`s (row/column block actions, not dense storage). One
-`GaussSeidelSweep::Forward` application is a block-lower-triangular solve;
-`Backward` is block-upper-triangular; `Symmetric` runs both sweeps in
-sequence. Same refusal discipline as `JacobiFactory`: no probing, no zero
-replacement, typed refusals for a diagonal-solve count/dimension mismatch, an
-out-of-range or self-coupling block index, and nonfinite input.
+`explicit.rs`. `ExplicitOperator` (style of `DaeOperator`): `dimension`,
+`rhs(cx, t, y, out)`, and defaulted `stable_step` (forward-Euler-stable step
+at CFL 1; `None` = undeclared, `+∞` = unconstrained, `≤0`/NaN refused),
+`admissibility -> Admissibility::{Admissible, Inadmissible{index, reason}}`,
+`linear_invariants -> &[Vec<f64>]` (weights `w_k`), `invariant_rates`
+(declared net boundary/source rate of each `w_k·y`; `false` = closed).
 
-Symmetry is declared, not assumed. `Forward`/`Backward` always declare
-`Nonsymmetric`. The symmetric sweep's action is `(D+U)⁻¹ D (D+L)⁻¹`, which
-is symmetric only when every `D_i` is symmetric AND `U = Lᵀ`, so `Symmetric`
-is declared only when every diagonal solve declares `Symmetric` and the
-coupling set is closed under transposition by owner declaration: each
-supplied block pair `(i, j)` and its mirror `(j, i)` are supplied by exactly
-one action each, both returning `BlockCouplingAction::transpose_of` = the
-other pair (a new defaulted trait method; `None` declares nothing, and a
-declaration naming any pair other than the mirror is refused at
-construction). A symmetric sweep with a `Nonsymmetric` diagonal solve
-declares `Nonsymmetric`; everything else (undeclared, one-directional or
-duplicated couplings, an `Unknown` inner solve) declares `Unknown` — never a
-`Symmetric` it cannot justify. (The first cut, `24f9c7d`, checked only the
-inner solves and declared a lower-only coupling set — whose action is the
-nonsymmetric `(D+L)⁻¹` — `Symmetric`, which conjugate gradient then admitted;
-fixed before publication.) `Preconditioner`
-gained a defaulted `symmetry()` method (`Unknown` unless overridden, so every
-preexisting preconditioner is unaffected); `solve_conjugate_gradient` and
-`solve_minres` now refuse a preconditioner explicitly declared
-`Nonsymmetric` (an addition — no preexisting preconditioner declares this,
-so no existing caller is affected; the MINRES twin of the refusal was
-missing in `24f9c7d`, proven by
-`minres_refuses_a_preconditioner_declared_nonsymmetric`).
-`BlockDiagonalPreconditioner` now declares `Symmetric`;
-`BlockLowerTriangularPreconditioner` now declares `Nonsymmetric`;
-`CompositeBlockPreconditioner` (block-diagonal composition) declares
-`Nonsymmetric` if any block declares `Nonsymmetric`, `Symmetric` if every
-block declares `Symmetric`, else `Unknown`
-(`composite_block_preconditioner_symmetry_follows_its_blocks`).
+`ExplicitScheme::{ForwardEuler, SspRk2, SspRk3, SspRk104, Rk4}` with
+`order()`, `stages()`, declared `ssp_coefficient()` (1, 1, 1, 6, `None` —
+RK4 declared non-SSP) and `tableau() -> ShuOsherTableau` (coefficients as
+data; `ssp_coefficient_from_coefficients()`, `butcher_form()`). SSP-RK(10,4)
+is Ketcheson's low-storage algorithm rewritten as a 10-row Shu–Osher form
+(rows 5 and 10 are the convex recombinations, α/β = 6 throughout).
+Summation order is fixed: each stage component accumulates `α_ij·Y_j` then
+`(β_ij·Δt)·F_j` for `j` ascending, zero coefficients skipped, no FMA
+(forward Euler is exactly `y + Δt·F`); invariants sum in component order.
+All stage states and right-hand sides are kept (`2s` vectors; a
+low-storage path is open).
 
-Proof: exact one-application solve of a block-triangular system for both
-`Forward` and `Backward` (`preconditioner.rs` tests); measured GMRES
-iteration counts to a relative `1e-3` reduction of the (left-)preconditioned
-residual on a 2-block and a 3-block coupled dense system of length-3
-blocks, asserted exactly — two blocks `(none, jacobi, gs) = (3, 3, 2)`,
-three blocks `(5, 4, 2)`. Exactly what these counts prove: forward block
-Gauss-Seidel needs fewer GMRES iterations than both elementwise Jacobi and
-no preconditioner at 2 and 3 blocks; elementwise Jacobi ties no
-preconditioner at 2 blocks and beats it at 3. (`24f9c7d` compared the runs
-under an absolute tolerance on residual norms that each left preconditioner
-scales differently — `(4, 2, 2)`/`(5, 3, 2)` — not a like-for-like
-comparison; fixed before publication.) Also proven: the
-symmetry declaration rule
-(`gauss_seidel_symmetry_declaration_follows_sweep_inner_solves_and_coupling_closure`:
-a lower-only symmetric sweep is numerically nonsymmetric and declared
-`Unknown`, a declared transposed pair is numerically symmetric and declared
-`Symmetric` and accepted by conjugate gradient, the forward sweep is refused
-by conjugate gradient); a 3-block, length-2 declared-transposed fixture whose
-`M⁻¹e_i·e_j` equals `M⁻¹e_j·e_i` over all unit vectors to 1e-12 and whose
-undeclared twin is `Unknown`
-(`symmetric_gauss_seidel_over_declared_transposed_couplings_is_numerically_symmetric`);
-the symmetric sweep's action against the closed form `(D+U)⁻¹ D (D+L)⁻¹` on
-a 3-block, length-2 system coupled in both directions, which also proves the
-backward pass is load-bearing (`symmetric_gauss_seidel_action_matches_its_closed_form`);
-the contradictory-declaration refusal; and every listed refusal.
+`StepPolicy::{Fixed{step}, Cfl{target, max, min_step, max_step}}`,
+`ExplicitConfig{scheme, step_policy}`, `ExplicitState{time, values,
+accepted_steps}` (serde; non-finite refused on deserialize;
+`initialize` refuses an inadmissible initial state as
+`SolveError::InadmissibleState`). `explicit_step(op, cx, state,
+final_time, cfg, retry_ceiling) -> ExplicitStepOutcome::{Accepted{state,
+report}, Rejected{attempted_step, rejection, suggested_step}}`; the input
+state is never mutated. Step = `Fixed.step` or `target·stable_step(y_n)`
+clipped to `max_step`, then to the retry ceiling; `< min_step` is
+`SolveError::StepSizeCollapse`; lands exactly on `final_time` when the
+remainder is ≤ the step plus `(k+4)·ε·max|t|` after `k` steps (no sliver
+steps). Every stage state is checked finite, then admissible:
+`ExplicitRejection::InadmissibleStage{stage, time, index, reason}`
+(suggestion `Δt/2` under `Cfl`, `None` under `Fixed`); under `Cfl` each
+stage's `Δt/stable_step(Y_i)` above `max(max, cfl_0)` is
+`CflExceeded{stage, cfl, max}` (suggestion `target·min hint`). Non-finite
+stages/rhs/rates and malformed weights/hints are `NumericError`s.
+`ExplicitStepReport{step, step_limit, scheme, stages, ssp_coefficient,
+cfl_realized (max over stages), balance_corrected, invariants:
+[InvariantBalance{before, after, predicted, balance_residual, scale}]}` —
+`predicted` integrates the declared rates with the scheme's own α/β, so for
+a conservative operator `balance_residual` is pure round-off relative to
+`scale = max Σ|w y|`. `integrate_explicit(.., max_attempts)` retries at the
+suggestion, refusing `Fixed` rejections (`ExplicitStepRejected`), collapse,
+and budget exhaustion (`ExplicitStepBudgetExhausted`). Krasis's L5
+`ExplicitExecution` consumes `explicit_step` (Rejected = retryable,
+`Err` = not).
 
-## SC-W3 iterate-sequence acceleration
+`spectral.rs`: `estimate_spectral_radius(matrix, n, iterations) ->
+SpectralRadiusReport{symmetric, gershgorin_upper_bound,
+rayleigh_lower_bound, power_estimate, iterations}` over a dense row-major
+matrix. Rigour: the Gershgorin bound (min of row/column abs-sums, inflated
+by `1+2(n+1)ε`) is a rigorous upper bound with rounding; the Rayleigh bound
+(exactly symmetric matrices only, rounding-deflated) is a rigorous lower
+bound; `power_estimate` is a heuristic (last Rayleigh quotient, or the
+second-half growth rate for nonsymmetric matrices, which also handles a
+complex dominant pair).
 
-`acceleration.rs`: `FixedPointOperator` (one `G(x)` evaluation over `&[f64]`)
-and `accelerate_fixed_point` drive `x_{k+1} = x_k + factor*(G(x_k) - x_k)`
-under `AccelerationMethod::FixedRelaxation` (constant factor) or `::Aitken`
-(vector Δ², factor recomputed each iteration from the two most recent
-fixed-point residuals). Typed report: per-iteration residual norm and the
-relaxation factor applied to that iterate (`None` on the terminal entry,
-where nothing is applied; replaying the recorded factors reproduces the
-returned state bit for bit). Convergence is tested before any factor is
-computed, so a converged sequence is never refused as a breakdown, and the
-Aitken degenerate-denominator test is relative —
-`‖Δr‖² ≤ 1e-16·max(‖r_k‖², ‖r_{k-1}‖²)`, plus exactly zero/non-finite —
-hence scale-invariant. Typed refusals, never NaN or a silent unconverged
-iterate: nonfinite evaluation/state (`NumericError`), a degenerate Aitken
-denominator (`SolveError::AccelerationBreakdown`), and exhausting
-`max_iterations` without meeting tolerance
-(`SolveError::AccelerationNotConverged`, a new variant carrying the full
-trace; the existing `SolveError::NotConverged` is untouched). (The first
-cut `24f9c7d` used an absolute `1e-14` floor evaluated before the
-convergence test, so a converged or small-scale sequence was refused as a
-breakdown — the contractive fixture at `absolute_tolerance = 1e-9` failed
-with `AccelerationBreakdown { iteration: 8 }` — and non-convergence dropped
-the trace; fixed before publication.)
+Proof (`tests/explicit_integration.rs`, `explicit.rs`/`spectral.rs` unit
+tests): order conditions through order 4 hold to 1e-14 for each tableau and
+the next order fails for orders 1–3; computed SSP coefficients equal the
+declared ones. Observed order, fixed steps N = 20/40/80/160 on [0, 2],
+least-squares fit (`estimate_convergence_order`), asserted `|fit − p| ≤ 0.1`:
+damped linear oscillator / nonlinear non-autonomous `y' = −2ty²`:
+FE 1.040/1.024, SSP-RK2 2.028/2.029, SSP-RK3 3.003/3.042, SSP-RK(10,4)
+3.991/4.007, RK4 3.975/4.025; each run takes exactly N steps. TVD: periodic
+first-order upwind (plain `&[f64]` operator), 100 cells, square wave, each
+SSP scheme at CFL = its SSP coefficient to t = 0.5 — total variation
+non-increasing every step (≤ +1e-13) and values in [−1e-15, 1+1e-15]
+(SSP-RK(10,4): 9 steps at CFL 6); forward Euler at CFL 1.5 raises TV by
+> 0.1 (negative control). Conservation: nonuniform periodic upwind, 64
+cells, every scheme to t = 2 at 0.9·C: per-step `|balance_residual|` ≤
+`(n + 4s)·ε·scale` (worst observed 3.5–5.0 ε·scale over 48–285 steps) and
+total drift ≤ the summed budget (observed ≤ 1.6e-14); a 1e-3 leak exceeds
+the bound by > 1e6×; an open inflow/outflow system is balanced by its
+declared rates (≤ 76 ε·scale) and is > 1e6 ε·scale without them. Plus
+rejection/retry/collapse/budget/Fixed-refusal paths, RK4 stage-3
+inadmissibility, CFL-stage rejection with exact suggestion, NaN/overflow
+refusals, serde round trips. Spectral: (−1,2,−1) tridiagonal bracketed with
+the estimate within 1e-6; upwind circulant estimate 2 ± 1e-2 under a
+bound ≤ 2(1+1e-14); scaled rotation exact; nilpotent → 0.
 
-Integrated into `solve_blocks` as `NewtonConfig.acceleration:
-Option<AccelerationMethod>` (`#[serde(default, skip_serializing_if =
-"Option::is_none")]`, `None` by default): when
-set, a `GaussSeidel`/`Jacobi` outer iteration relaxes its partitioned Newton
-correction by the accelerator instead of backtracking (the correction vector
-itself is the fixed-point residual; no extra `G` evaluation).
-`IterationTrace.accepted_damping` then carries the relaxation factor applied
-at that iteration, which Aitken does not bound to `(0, 1]` (it may be
-negative or exceed 1), unlike the line-search damping. The Aitken history
-(previous correction and factor) lives inside one `solve_blocks` call, so
-Krasis's per-sweep driver (one `solve_blocks` call with `max_iterations = 1`
-per sweep) cannot consume this path — its history resets every call; the
-consumable shape for a sweep loop is `accelerate_fixed_point` with a
-`FixedPointOperator` wrapping one sweep. Refused with
-`Monolithic` (no partitioned fixed-point sequence exists there). No new
-entry point; every existing `solve_blocks` call behaves identically because
-the field defaults to `None` (exhaustive `NewtonConfig` literals must name
-the field; see Milestone).
+Open: `ImexOperator` (ARK2/3) not declared — a trait with no integrator
+using it would be dead scaffolding; specify with the first IMEX case.
+Low-storage (2-register) execution of SSP-RK(10,4); embedded error
+estimators/adaptive accuracy control (only CFL control exists).
 
-Proof: a contractive 2-block linear fixed point where Aitken converges in
-provably fewer iterations than plain iteration, counts asserted exactly
-(`(plain, aitken) = (111, 8)` at `absolute_tolerance = 1e-6`; 10
-evaluations at `1e-9`, where `24f9c7d` broke down); the same sequence at
-scale `1e-9` converging in the same iterations with the same factors
-(`aitken_degeneracy_test_is_scale_invariant`); the trace replay
-(`trace_records_each_factor_on_the_entry_it_was_applied_to`); a divergent
-full-step iteration refused as `AccelerationNotConverged` with all 21
-residual norms strictly growing; exact-zero and near-stalling (relative, at
-scales `1e-9`, `1`, `1e4`) degenerate-denominator refusals; a
-nonfinite-evaluation refusal; relaxation-factor bounds `(0, 1]` refused
-outside that range; and,
-in `solve_blocks`, a strongly-coupled (0.99) 2-block system that an
-unaccelerated `GaussSeidel` fails to converge on (existing test) now
-converges under Aitken acceleration, plus the `Monolithic` refusal.
+## SC-W3 preconditioners and acceleration (2026-09-29, review-fixed 2026-10-08)
 
-Out of scope (unchanged from the brief): IQN, multiplier/Nitsche interfaces,
-multilevel/ILU preconditioning, and Schur-complement/pressure-mass block
-*computation* (only the composition contract exists, per "Known limits").
+`BlockGaussSeidelPreconditioner` (forward/backward/symmetric sweeps over an
+owner `BlockLayout`, owner diagonal solves and action-based
+`BlockCouplingAction`s; typed refusals, no probing). Symmetry is declared,
+never assumed: `Symmetric` only for the symmetric sweep with every diagonal
+solve `Symmetric` and couplings closed under owner-declared transposition
+(`BlockCouplingAction::transpose_of`), else `Unknown`/`Nonsymmetric`.
+`Preconditioner::symmetry()` (defaulted `Unknown`); CG and MINRES refuse a
+`Nonsymmetric` preconditioner; block-diagonal declares `Symmetric`, block
+lower-triangular `Nonsymmetric`, `CompositeBlockPreconditioner` follows its
+blocks. Measured GMRES counts to a relative 1e-3 reduction (none, Jacobi,
+GS): 2 blocks (3, 3, 2), 3 blocks (5, 4, 2).
+
+`accelerate_fixed_point` (`FixedRelaxation`, `Aitken`) over `&[f64]`
+fixed-point sequences: convergence tested before any factor, relative
+scale-invariant Aitken breakdown test, per-entry factor trace that replays
+bit for bit, `AccelerationBreakdown`/`AccelerationNotConverged{trace}`
+refusals. Opt-in inside `solve_blocks` via `NewtonConfig.acceleration`
+(`None` default, skipped when `None` so `NewtonConfig` bytes are unchanged;
+pinned against the pre-field literal). Aitken counts (plain, aitken) =
+(111, 8) at 1e-6. Krasis's per-sweep driver must use `accelerate_fixed_point`
+(history resets per `solve_blocks` call). Details: git history of
+`24f9c7d..a9d97c8`.
 
 ## Current role
 
@@ -246,21 +194,29 @@ root package named `methodus` with no subordinate packages.
   accepted implicit step used, from the pre-step state and accepted values.
 - `NumericError::Evaluation { code, origin, message }` (W8): a producer's typed
   evaluation failure passes unchanged through every algorithm and `SolveError`.
+- `ExplicitOperator`, `explicit_step`/`integrate_explicit` (SSP-RK1/2/3,
+  SSP-RK(10,4), RK4) with `StepPolicy::{Fixed, Cfl}`, stage admissibility,
+  and per-step linear-invariant balance telemetry (SV2-C4).
+- `estimate_spectral_radius`: dense Gershgorin upper / symmetric Rayleigh
+  lower bounds and a power-iteration estimate (SV2-C4 `SpectralBound`).
 
 ## Dependency contract
 
 Krasis implements `NonlinearOperator`/`DaeOperator`/`BlockNonlinearOperator`;
 Finitum implements `LinearOperator` (and `TransposableOperator` where it has a
-transpose); Solverang implements `LeastSquaresOperator`. Methodus depends on no
+transpose) and, for finite volume, `ExplicitOperator`; Krasis drives
+`explicit_step` inside its explicit transaction; Solverang implements `LeastSquaresOperator`. Methodus depends on no
 scientific-stack repository.
 
 ## Validation
 
-- `cargo test -p methodus --lib`: 91 tests passed, none failed or ignored
-  (79 at `24f9c7d`, plus 12 review-fix tests).
-- `cargo test -p methodus --test <name>` for each of `adjoint` (9),
-  `coupling_strategies` (4), `newton_krylov` (12), `time_integration` (7),
-  `time_restart_events` (2), `transpose` (3): all passed. 128 tests total.
+2026-10-19, opt-level 2 test profile:
+- `cargo test -p methodus --lib`: 99 passed, none failed or ignored (the 91
+  preexisting plus 4 `explicit` and 4 `spectral` unit tests).
+- `cargo test -p methodus --test <name>`: `adjoint` 9, `coupling_strategies`
+  4, `newton_krylov` 12, `time_integration` 7, `time_restart_events` 2,
+  `transpose` 3 (the 128 preexisting tests, unchanged and passing), and
+  `explicit_integration` 11 — all passed. 147 tests total.
 - `cargo fmt -p methodus -- --check`: passed.
 - `cargo clippy -p methodus --all-targets --all-features -- -D warnings`: passed.
 - `RUSTDOCFLAGS='-D warnings' cargo doc -p methodus --no-deps`: passed.

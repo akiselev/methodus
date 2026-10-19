@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::acceleration::AccelerationIteration;
+use crate::explicit::ExplicitRejection;
 
 /// Failure reported while evaluating a numerical operator.
 #[derive(Clone, Debug, PartialEq, Eq, Error, Serialize, Deserialize)]
@@ -86,6 +87,30 @@ pub enum SolveError {
     /// (one entry per evaluation, the terminal one without a factor).
     #[error("fixed-point acceleration did not converge within {} evaluations", .trace.len())]
     AccelerationNotConverged { trace: Vec<AccelerationIteration> },
+    /// An explicit step size fell below the policy minimum (`minimum_step`
+    /// is zero when the step no longer advances the time coordinate).
+    #[error("explicit step {step} at time {time} is below the minimum step {minimum_step}")]
+    StepSizeCollapse {
+        time: f64,
+        step: f64,
+        minimum_step: f64,
+    },
+    /// An explicit initial state is outside the operator's admissible set.
+    #[error("inadmissible explicit initial state: {reason}")]
+    InadmissibleState {
+        index: Option<usize>,
+        reason: String,
+    },
+    /// `integrate_explicit` met a rejection it may not retry
+    /// (`StepPolicy::Fixed` never shrinks its step).
+    #[error("explicit step from time {time} rejected: {rejection}")]
+    ExplicitStepRejected {
+        time: f64,
+        rejection: ExplicitRejection,
+    },
+    /// `integrate_explicit` used its attempt budget before the final time.
+    #[error("explicit integration stopped at time {time} after {attempts} attempts")]
+    ExplicitStepBudgetExhausted { time: f64, attempts: usize },
 }
 
 #[cfg(test)]
