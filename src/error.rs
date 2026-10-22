@@ -3,6 +3,7 @@ use thiserror::Error;
 
 use crate::acceleration::AccelerationIteration;
 use crate::explicit::ExplicitRejection;
+use crate::imex::ImexRejection;
 
 /// Failure reported while evaluating a numerical operator.
 #[derive(Clone, Debug, PartialEq, Eq, Error, Serialize, Deserialize)]
@@ -111,6 +112,13 @@ pub enum SolveError {
     /// `integrate_explicit` used its attempt budget before the final time.
     #[error("explicit integration stopped at time {time} after {attempts} attempts")]
     ExplicitStepBudgetExhausted { time: f64, attempts: usize },
+    /// `integrate_imex` met a rejection it may not retry
+    /// (`StepPolicy::Fixed` never shrinks its step).
+    #[error("IMEX step from time {time} rejected: {rejection}")]
+    ImexStepRejected { time: f64, rejection: ImexRejection },
+    /// `integrate_imex` used its attempt budget before the final time.
+    #[error("IMEX integration stopped at time {time} after {attempts} attempts")]
+    ImexStepBudgetExhausted { time: f64, attempts: usize },
 }
 
 #[cfg(test)]

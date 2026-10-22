@@ -12,6 +12,7 @@ mod block;
 mod context;
 mod error;
 mod explicit;
+mod imex;
 mod krylov;
 mod krylov_method;
 mod least_squares;
@@ -45,6 +46,11 @@ pub use explicit::{
     ExplicitConfig, ExplicitIntegrationReport, ExplicitOperator, ExplicitRejectedStep,
     ExplicitRejection, ExplicitScheme, ExplicitState, ExplicitStepOutcome, ExplicitStepReport,
     InvariantBalance, ShuOsherTableau, StepLimit, StepPolicy, explicit_step, integrate_explicit,
+};
+pub use imex::{
+    ArkTableau, ImexAcceptedStep, ImexConfig, ImexIntegrationReport, ImexOperator,
+    ImexRejectedStep, ImexRejection, ImexScheme, ImexStepOutcome, ImexStepReport,
+    ImplicitStageReport, ImplicitStageSolve, ImplicitStageSolver, imex_step, integrate_imex,
 };
 pub use krylov::{
     BiCgStabConfig, GmresConfig, GmresReport, MinresConfig, solve_bicgstab, solve_gmres,
