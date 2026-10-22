@@ -707,6 +707,7 @@ fn nonfinite_values_and_malformed_hints_are_refused_not_propagated() {
         time: 0.0,
         values: vec![1.0],
         accepted_steps: 0,
+        error_control: None,
     };
     let fixed_config = fixed(ExplicitScheme::SspRk3, 0.1);
     let nan = Broken {

@@ -41,10 +41,10 @@ pub use block::{
 pub use context::EvaluationContext;
 pub use error::{NumericError, SolveError};
 pub use explicit::{
-    Admissibility, ButcherForm, ExplicitAcceptedStep, ExplicitConfig, ExplicitIntegrationReport,
-    ExplicitOperator, ExplicitRejectedStep, ExplicitRejection, ExplicitScheme, ExplicitState,
-    ExplicitStepOutcome, ExplicitStepReport, InvariantBalance, ShuOsherTableau, StepLimit,
-    StepPolicy, explicit_step, integrate_explicit,
+    Admissibility, ButcherForm, ErrorControlMemory, ErrorControlReport, ExplicitAcceptedStep,
+    ExplicitConfig, ExplicitIntegrationReport, ExplicitOperator, ExplicitRejectedStep,
+    ExplicitRejection, ExplicitScheme, ExplicitState, ExplicitStepOutcome, ExplicitStepReport,
+    InvariantBalance, ShuOsherTableau, StepLimit, StepPolicy, explicit_step, integrate_explicit,
 };
 pub use krylov::{
     BiCgStabConfig, GmresConfig, GmresReport, MinresConfig, solve_bicgstab, solve_gmres,
